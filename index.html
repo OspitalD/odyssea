@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#0D0F0E" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Odyssea" />
+  <meta name="description" content="Odyssea — Ὀδύσσεια. 20 semaines, 4 chants, 1 destination." />
+  <title>Odyssea — Ὀδύσσεια</title>
+
+  <!-- Fonts : Plus Jakarta Sans (texte) + EB Garamond italic (grec ancien) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=EB+Garamond:ital@1&display=swap" rel="stylesheet" />
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="./assets/icon.svg" />
+  <link rel="apple-touch-icon" href="./assets/icon.svg" />
+
+  <style>
+    /* ==========================================================
+       Design tokens — Odyssea (SPEC v3 §Niveau 1)
+       Tokens renommés mythologiquement, mêmes hex que mobility-dashboard.
+       ========================================================== */
+    :root {
+      /* Backgrounds */
+      --bg-primary: #0D0F0E;
+      --bg-surface: #111412;
+      --bg-surface-hover: #141815;
+
+      /* Borders */
+      --border-subtle: rgba(255, 255, 255, 0.06);
+      --border-strong: rgba(255, 255, 255, 0.10);
+      --border-active: #1A1E1C;
+
+      /* Accents — mythologie */
+      --accent-laurel:  #3ECFA0;  /* succès, set validé, victoire mortelle */
+      --accent-olympus: #E8A020;  /* divin, PR battu, rang supérieur */
+      --accent-royal:   #B990E0;  /* noble, info, achievement */
+      --accent-blood:   #E05A4A;  /* sacrifice, recul, danger */
+
+      /* Text */
+      --text-primary:   #F5F5F3;
+      --text-secondary: #7A7C7A;
+      --text-tertiary:  #4A4D4B;
+
+      /* Streak ranks (Mortel→Olympien) */
+      --rank-mortel:    #7A7C7A;
+      --rank-hoplite:   #CD8032;
+      --rank-stratege:  #A8A8BE;
+      --rank-heros:     #DAA520;
+      --rank-demidieu:  #B8E0F8;
+      --rank-olympien:  #C39BD3;
+
+      /* Typography */
+      --font-sans:  'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-greek: 'EB Garamond', 'Times New Roman', Georgia, serif;
+
+      /* Layout */
+      --bottom-nav-h: 72px;
+      --max-app-width: 430px;
+
+      /* Motion */
+      --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+      --dur-fast: 0.15s;
+      --dur-normal: 0.25s;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body, #root { height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      overscroll-behavior-y: none;
+    }
+    button { font-family: inherit; }
+    a { color: inherit; text-decoration: none; }
+    input, textarea, select { font-family: inherit; color: inherit; }
+
+    .greek { font-family: var(--font-greek); font-style: italic; }
+
+    .app-shell {
+      min-height: 100%;
+      max-width: var(--max-app-width);
+      margin: 0 auto;
+      background: var(--bg-primary);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      padding-top: env(safe-area-inset-top, 0px);
+      box-sizing: border-box;
+    }
+    .app-main {
+      flex: 1 1 auto;
+      padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px));
+      min-height: 0;
+    }
+    .app-main--no-nav { padding-bottom: env(safe-area-inset-bottom, 0px); }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+
+    button, [role="button"] { min-height: 44px; }
+    .tap-area { min-width: 44px; min-height: 44px; }
+
+    #boot-loader {
+      position: fixed; inset: 0;
+      display: grid; place-items: center;
+      background: var(--bg-primary);
+      color: var(--accent-olympus);
+      font-family: var(--font-greek);
+      font-style: italic;
+      font-size: 48px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes fade-in-up {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div id="boot-loader">Ω</div>
+  </div>
+
+  <noscript>
+    <div style="padding:40px;text-align:center;color:#F5F5F3;font-family:system-ui,sans-serif;">
+      Active JavaScript pour utiliser Odyssea.
+    </div>
+  </noscript>
+
+  <!-- ============================================================
+       VENDOR (CDN) — React 18 + Babel standalone (pattern mobility-dashboard)
+       Dexie sera ajouté Mer 6 (Niveau 0 data layer).
+       ============================================================ -->
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+
+  <!-- ============================================================
+       APPLICATION
+       ============================================================ -->
+  <script type="text/babel" data-presets="react">
+  const { useState, useEffect, useMemo, useContext, createContext, useCallback } = React;
+
+  /* ==========================================================
+     CONST API (SPEC v3 §API)
+     ========================================================== */
+  const API_URL = 'https://script.google.com/macros/s/AKfycbxsOdnNAEmyONDJYYkCWwQjK5bX6HunFQ3auV_pInSTzoz-GE5rEfdHr9SeZ2Gvwei7oQ/exec';
+  const ATHX_DATE = '2026-09-19';
+
+  const ROUTES = {
+    AUJOURDHUI: '/aujourdhui',
+    SEMAINE:    '/semaine',
+    STATS:      '/stats',
+    REGLAGES:   '/reglages',
+  };
+  const DEFAULT_ROUTE = ROUTES.AUJOURDHUI;
+
+  /* ==========================================================
+     CATALOGUE STATIQUE — Mythologie (SPEC v3 §Niveau 2 + v4 patch)
+     ========================================================== */
+  // Blocks renommés (v4 patch — Lotophages en B1, pattern de drop documenté)
+  const BLOCKS = [
+    { id: 1, name: 'Les Lotophages', weeks: [1,  6]  },
+    { id: 2, name: 'Le Cyclope',     weeks: [7,  12] },
+    { id: 3, name: 'Circé',          weeks: [13, 16] },
+    { id: 4, name: 'Ithaque',        weeks: [17, 20] },
+  ];
+
+  // Streak ranks Mortel → Olympien
+  const STREAK_RANKS = [
+    { min: 0,   name: 'Mortel',    token: 'var(--rank-mortel)'   },
+    { min: 7,   name: 'Hoplite',   token: 'var(--rank-hoplite)'  },
+    { min: 14,  name: 'Stratège',  token: 'var(--rank-stratege)' },
+    { min: 30,  name: 'Héros',     token: 'var(--rank-heros)'    },
+    { min: 60,  name: 'Demi-dieu', token: 'var(--rank-demidieu)' },
+    { min: 100, name: 'Olympien',  token: 'var(--rank-olympien)' },
+  ];
+
+  // Pool de phrases fin de session (v4 patch §Microcopy variable)
+  // Cablé avec la logique pickEndPhrase() en Vendredi 8 (Niveau 1).
+  const SESSION_END_PHRASES = [
+    "Endure, mon cœur.",
+    "Mètis intacte.",
+    "Thumos plein.",
+    "Kléos accroît.",
+    "Cyclope aveuglé.",
+    "Sirènes ignorées.",
+    "Lotophages dépassés.",
+    "Calypso quittée.",
+    "Le mât tenu.",
+    "Athéna veille.",
+    "Pénélope tisse.",
+    "Argos se souvient.",
+    "Cap sur Ithaque.",
+    "L'arc se tend.",
+  ];
+
+  /* ==========================================================
+     UTILS
+     ========================================================== */
+  const daysUntil = (isoDate) => {
+    const target = new Date(isoDate + 'T00:00:00');
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    return Math.max(0, Math.round((target - now) / 86400000));
+  };
+
+  const getCurrentBlock = (week) => {
+    return BLOCKS.find(b => week >= b.weeks[0] && week <= b.weeks[1]) || BLOCKS[0];
+  };
+
+  const getRank = (streak) => {
+    let current = STREAK_RANKS[0];
+    for (const rank of STREAK_RANKS) {
+      if (streak >= rank.min) current = rank;
+    }
+    return current;
+  };
+
+  /* ==========================================================
+     Mini hash router — pattern mobility-dashboard
+     ========================================================== */
+  const RouterContext = createContext({ path: DEFAULT_ROUTE, query: {}, navigate: () => {} });
+
+  const parseHash = () => {
+    const raw = (window.location.hash || '').replace(/^#/, '');
+    const [pathRaw, queryRaw = ''] = raw.split('?');
+    const path = pathRaw || DEFAULT_ROUTE;
+    const query = {};
+    if (queryRaw) {
+      queryRaw.split('&').forEach(pair => {
+        if (!pair) return;
+        const [k, v = ''] = pair.split('=');
+        query[decodeURIComponent(k)] = decodeURIComponent(v);
+      });
+    }
+    return { path, query };
+  };
+
+  const HashRouter = ({ children }) => {
+    const [state, setState] = useState(parseHash);
+    useEffect(() => {
+      const onHash = () => setState(parseHash());
+      window.addEventListener('hashchange', onHash);
+      if (!window.location.hash) {
+        window.location.hash = '#' + DEFAULT_ROUTE;
+      }
+      return () => window.removeEventListener('hashchange', onHash);
+    }, []);
+
+    const navigate = useCallback((to, opts = {}) => {
+      const target = to.startsWith('#') ? to : '#' + to;
+      if (opts.replace) {
+        const newUrl = window.location.pathname + window.location.search + target;
+        window.history.replaceState(null, '', newUrl);
+        setState(parseHash());
+      } else {
+        window.location.hash = target;
+      }
+    }, []);
+
+    return (
+      <RouterContext.Provider value={{ ...state, navigate }}>
+        {children}
+      </RouterContext.Provider>
+    );
+  };
+
+  const Routes = ({ children }) => {
+    const { path } = useContext(RouterContext);
+    const routes = React.Children.toArray(children);
+    const exact = routes.find(r => r.props.path === path);
+    if (exact) return exact.props.element;
+    const wildcard = routes.find(r => r.props.path === '*');
+    return wildcard ? wildcard.props.element : null;
+  };
+  const Route = () => null;
+
+  const useNavigate = () => useContext(RouterContext).navigate;
+  const useLocation = () => {
+    const { path, query } = useContext(RouterContext);
+    return { path, query };
+  };
+
+  /* ==========================================================
+     Icônes SVG inline
+     ========================================================== */
+  const Icon = ({ d, color = 'currentColor', size = 22, stroke = 1.8 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {Array.isArray(d) ? d.map((p, i) => <path key={i} d={p} />) : <path d={d} />}
+    </svg>
+  );
+  const Icons = {
+    dumbbell: (color, size) => (
+      <Icon size={size} color={color} d={[
+        'M6.5 6.5l11 11', 'M21 21l-1-1', 'M3 3l1 1',
+        'M18 22l4-4', 'M2 6l4-4',
+        'M3 10l7-7 4 4-7 7-4-4z',
+        'M14 17l3-3 4 4-3 3-4-4z',
+      ]} />
+    ),
+    calendar: (color, size) => (
+      <Icon size={size} color={color} d={[
+        'M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
+        'M16 1v4', 'M8 1v4', 'M3 9h18',
+      ]} />
+    ),
+    scroll: (color, size) => (
+      <Icon size={size} color={color} d={[
+        'M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4',
+        'M19 17V5a2 2 0 0 0-2-2H4',
+      ]} />
+    ),
+    settings: (color, size) => (
+      <Icon size={size} color={color} d={[
+        'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+        'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z',
+      ]} />
+    ),
+  };
+
+  /* ==========================================================
+     Logo — Ω + Odyssea + Ὀδύσσεια (SPEC v3 §Identité)
+     ========================================================== */
+  const Logo = ({ size = 'md' }) => {
+    const omegaSize = size === 'lg' ? 96 : size === 'sm' ? 36 : 56;
+    const titleSize = size === 'lg' ? 32 : size === 'sm' ? 14 : 20;
+    const subSize   = size === 'lg' ? 18 : size === 'sm' ? 10 : 13;
+    return (
+      <div style={{ textAlign: 'center', lineHeight: 1, userSelect: 'none' }}>
+        <div className="greek" style={{
+          fontSize: omegaSize,
+          color: 'var(--accent-olympus)',
+          fontStyle: 'italic',
+          fontWeight: 400,
+          letterSpacing: '-2px',
+        }}>Ω</div>
+        <div style={{
+          marginTop: omegaSize * 0.16,
+          fontSize: titleSize,
+          fontWeight: 800,
+          letterSpacing: '0.5px',
+          color: 'var(--text-primary)',
+        }}>Odyssea</div>
+        <div className="greek" style={{
+          marginTop: 4,
+          fontSize: subSize,
+          color: 'var(--text-secondary)',
+          opacity: 0.85,
+        }}>Ὀδύσσεια</div>
+      </div>
+    );
+  };
+
+  /* ==========================================================
+     Bottom nav — 4 routes, pattern mobility-dashboard
+     ========================================================== */
+  const NAV_ITEMS = [
+    { id: 'today',    to: ROUTES.AUJOURDHUI, label: "Aujourd'hui", icon: Icons.dumbbell, activeColor: 'var(--accent-laurel)'  },
+    { id: 'week',     to: ROUTES.SEMAINE,    label: 'Semaine',     icon: Icons.calendar, activeColor: 'var(--accent-royal)'   },
+    { id: 'stats',    to: ROUTES.STATS,      label: 'Stats',       icon: Icons.scroll,   activeColor: 'var(--accent-laurel)'  },
+    { id: 'settings', to: ROUTES.REGLAGES,   label: 'Réglages',    icon: Icons.settings, activeColor: 'var(--accent-olympus)' },
+  ];
+
+  const BottomNav = () => {
+    const { path } = useLocation();
+    const navigate = useNavigate();
+    return (
+      <nav
+        aria-label="Navigation principale"
+        style={{
+          position: 'fixed',
+          bottom: 0, left: '50%',
+          transform: 'translateX(-50%)',
+          width: '100%',
+          maxWidth: 'var(--max-app-width)',
+          height: 'calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px))',
+          paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+          background: 'var(--bg-surface)',
+          borderTop: '1px solid var(--border-active)',
+          display: 'flex',
+          zIndex: 50,
+        }}
+      >
+        {NAV_ITEMS.map(item => {
+          const active = path === item.to;
+          const color = active ? item.activeColor : '#8A8F8C';
+          return (
+            <button
+              key={item.id}
+              onClick={() => navigate(item.to)}
+              aria-label={item.label}
+              aria-current={active ? 'page' : undefined}
+              style={{
+                flex: 1,
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: 0,
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 5,
+                color,
+                transition: 'color var(--dur-fast) var(--ease-out)',
+              }}
+            >
+              {active && (
+                <span aria-hidden="true" style={{
+                  position: 'absolute', top: 0, left: '50%',
+                  transform: 'translateX(-50%)',
+                  width: 28, height: 2.5,
+                  background: item.activeColor,
+                }} />
+              )}
+              {item.icon(color, 22)}
+              <span style={{
+                fontSize: 10,
+                fontWeight: active ? 800 : 600,
+                letterSpacing: '-0.2px',
+                whiteSpace: 'nowrap',
+                color,
+              }}>{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+    );
+  };
+
+  /* ==========================================================
+     Compte à rebours ATHX (Ithaque)
+     ========================================================== */
+  const AthxCountdown = () => {
+    const days = daysUntil(ATHX_DATE);
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'baseline', gap: 8,
+        padding: '12px 16px',
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 14,
+        color: 'var(--accent-olympus)',
+      }}>
+        <span style={{ fontSize: 26, fontWeight: 800, letterSpacing: '-0.5px' }}>{days}</span>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+          jours → Ithaque
+        </span>
+      </div>
+    );
+  };
+
+  /* ==========================================================
+     UI primitives (extension Mer-Jeu)
+     ========================================================== */
+  const Card = ({ children, style }) => (
+    <div style={{
+      background: 'var(--bg-surface)',
+      border: '1px solid var(--border-subtle)',
+      borderRadius: 14,
+      padding: 16,
+      ...style,
+    }}>{children}</div>
+  );
+
+  const PageWrap = ({ title, subtitle, children }) => (
+    <div style={{ padding: '20px 16px 24px', animation: 'fade-in var(--dur-normal) var(--ease-out)' }}>
+      <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, letterSpacing: '-0.5px' }}>{title}</h1>
+      {subtitle && (
+        <p style={{ margin: '4px 0 18px', color: 'var(--text-secondary)', fontSize: 13 }}>{subtitle}</p>
+      )}
+      {children}
+    </div>
+  );
+
+  /* ==========================================================
+     PAGES — mocks Mardi.
+     - /aujourdhui → Mer/Jeu : steppers, saisie set, calculs live
+     - /semaine    → Mer : 7 cards jour, statuts
+     - /stats      → Jeu/Ven : e1RM par exo + delta + (badges N3)
+     - /reglages   → Ven : ATHX date, sons, reset, export
+     ========================================================== */
+  const AujourdhuiPage = () => {
+    // Mock : on sera Sem 1, Block 1, Lundi (Strength 1) lundi 11 mai.
+    const week = 1;
+    const block = getCurrentBlock(week);
+    return (
+      <PageWrap title="Aujourd'hui" subtitle={`Bloc ${block.id} · ${block.name} · Sem ${week}/${block.weeks[1]}`}>
+        <AthxCountdown />
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+            Niveau 0 — saisie set
+          </div>
+          <div style={{ color: 'var(--text-primary)' }}>
+            Steppers Weight / Reps / RIR + calculs Epley + Stress Index — implémentation Jeu 7 mai.
+          </div>
+        </Card>
+      </PageWrap>
+    );
+  };
+
+  const SemainePage = () => {
+    const week = 1;
+    const block = getCurrentBlock(week);
+    return (
+      <PageWrap title="Semaine" subtitle={`Bloc ${block.id} · ${block.name} · Sem ${week}/${block.weeks[1]}`}>
+        <Card>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+            Niveau 0 — vue 7 jours
+          </div>
+          7 cards jour avec statuts ✓ / ⏰ / ⏳ — implémentation Mer 6 mai (avec seed Block 1 IndexedDB).
+        </Card>
+      </PageWrap>
+    );
+  };
+
+  const StatsPage = () => (
+    <PageWrap title="Stats" subtitle="e1RM par exercice · standards ATHX">
+      <Card>
+        <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+          Niveau 0 — e1RM tracking
+        </div>
+        Liste des 6 lifts principaux + delta vs début bloc — implémentation Ven 8 mai.
+      </Card>
+    </PageWrap>
+  );
+
+  const ReglagesPage = () => {
+    const [pingState, setPingState] = useState({ status: 'idle', msg: '' });
+    const ping = async () => {
+      setPingState({ status: 'loading', msg: 'Test en cours…' });
+      try {
+        const res = await fetch(API_URL);
+        const json = await res.json();
+        if (json.ok) setPingState({ status: 'ok', msg: json.message || 'API alive' });
+        else setPingState({ status: 'err', msg: json.error || 'Réponse inattendue' });
+      } catch (e) {
+        setPingState({ status: 'err', msg: e.message || 'Erreur réseau' });
+      }
+    };
+    const pingColor = {
+      idle:    'var(--text-tertiary)',
+      loading: 'var(--accent-royal)',
+      ok:      'var(--accent-laurel)',
+      err:     'var(--accent-blood)',
+    }[pingState.status];
+    return (
+      <PageWrap title="Réglages" subtitle="API · ATHX · sons · reset">
+        <Card>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+            API Apps Script
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', wordBreak: 'break-all', marginBottom: 10 }}>
+            {API_URL}
+          </div>
+          <button
+            type="button"
+            onClick={ping}
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 10,
+              color: 'var(--text-primary)',
+              padding: '8px 14px',
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: '0.4px',
+              textTransform: 'uppercase',
+              cursor: 'pointer',
+            }}
+          >Test connexion</button>
+          {pingState.status !== 'idle' && (
+            <div style={{ marginTop: 10, fontSize: 13, color: pingColor }}>{pingState.msg}</div>
+          )}
+        </Card>
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+            Date Ithaque
+          </div>
+          <div>{ATHX_DATE} · ATHX Marseille</div>
+        </Card>
+      </PageWrap>
+    );
+  };
+
+  /* ==========================================================
+     APP SHELL — header avec logo Ω
+     ========================================================== */
+  const AppHeader = () => (
+    <header style={{
+      padding: '20px 16px 8px',
+      display: 'flex',
+      justifyContent: 'center',
+    }}>
+      <Logo size="sm" />
+    </header>
+  );
+
+  /* ==========================================================
+     Service worker registration
+     ========================================================== */
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    });
+  }
+
+  /* ==========================================================
+     APP
+     ========================================================== */
+  const App = () => (
+    <HashRouter>
+      <div className="app-shell">
+        <AppHeader />
+        <main className="app-main">
+          <Routes>
+            <Route path={ROUTES.AUJOURDHUI} element={<AujourdhuiPage />} />
+            <Route path={ROUTES.SEMAINE}    element={<SemainePage />} />
+            <Route path={ROUTES.STATS}      element={<StatsPage />} />
+            <Route path={ROUTES.REGLAGES}   element={<ReglagesPage />} />
+            <Route path="*" element={<AujourdhuiPage />} />
+          </Routes>
+        </main>
+        <BottomNav />
+      </div>
+    </HashRouter>
+  );
+
+  const root = ReactDOM.createRoot(document.getElementById('root'));
+  root.render(<App />);
+  </script>
+</body>
+</html>

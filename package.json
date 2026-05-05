@@ -1,0 +1,10 @@
+{
+  "name": "odyssea",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Odyssea — Ὀδύσσεια. PWA single-file React+Babel zero-build. 20 semaines, 4 chants, 1 destination : ATHX Marseille.",
+  "engines": {
+    "node": ">=20"
+  }
+}

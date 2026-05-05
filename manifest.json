@@ -1,0 +1,18 @@
+{
+  "name": "Odyssea",
+  "short_name": "Odyssea",
+  "description": "Ὀδύσσεια — 20 semaines, 4 chants, 1 destination : ATHX Marseille.",
+  "start_url": "./#/aujourdhui",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0D0F0E",
+  "theme_color": "#0D0F0E",
+  "lang": "fr",
+  "dir": "ltr",
+  "categories": ["fitness", "health", "productivity"],
+  "icons": [
+    { "src": "./assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
