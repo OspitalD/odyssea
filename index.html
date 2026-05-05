@@ -298,10 +298,14 @@
       const count = await db.programme.count();
       if (count > 0) return { ok: true, skipped: true, count };
       try {
+        // CRITIQUE : pas de Content-Type explicite. Apps Script fait du
+        // 302 → script.googleusercontent.com sur les POST. application/json
+        // déclenche un preflight CORS qu'Apps Script ne gère pas → fail.
+        // text/plain (default fetch) = "simple request" → pas de preflight.
+        // Apps Script lit `e.postData.contents` en raw, le JSON.parse marche.
         const res = await fetch(API_URL, {
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'readWeek', week: 1 }),
           method: 'POST',
+          body: JSON.stringify({ action: 'readWeek', week: 1 }),
         });
         const data = await res.json();
         if (!data || !data.ok || !data.sessions) {
