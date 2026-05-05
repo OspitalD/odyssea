@@ -354,6 +354,57 @@
     },
   ];
 
+  // Pool de mantras du jour (SPEC §11 Étape 9) — pool tournant à chaque
+  // ouverture, mix homérique + stoïcien (Marc Aurèle, Épictète).
+  // Affichage discret en haut de /aujourdhui en EB Garamond italique.
+  const MANTRAS = [
+    // Homère / Odyssée
+    "Endure, mon cœur ; tu as enduré pis encore.",
+    "L'homme qui se gouverne lui-même est invincible.",
+    "L'arc d'Ulysse, nul ne le tend que celui qui doit le tendre.",
+    "Mêtis vaut mieux que force.",
+    "Le mât tient. Toi aussi.",
+    "Pénélope tisse. Toi aussi.",
+    "Ne crains ni Charybde ni Scylla. Choisis.",
+    "Les vents te portent quand tu rames.",
+    // Stoïciens
+    "Tu as autorité sur ton esprit, pas sur les événements.",
+    "L'obstacle au chemin devient le chemin.",
+    "Confine-toi au présent.",
+    "Tu deviens ce à quoi tu prêtes attention.",
+    "Le corps est l'instrument de l'âme.",
+    "Vis selon ta nature.",
+    "Souviens-toi : ce qui dépend de toi, et rien d'autre.",
+    "Les difficultés révèlent l'homme.",
+    "Aime ce que tu fais. Fais ce que tu aimes.",
+    "Ne sois pas en colère contre la pierre qui tombe.",
+    // Pindare / lyrique grecque
+    "Deviens ce que tu es.",
+    "Brève est la vie. Sois magnanime.",
+    // Aristote
+    "Nous sommes ce que nous répétons.",
+    "L'excellence est une habitude, pas un acte.",
+    // Héraclite
+    "Le caractère est destin.",
+    "On ne se baigne pas deux fois dans le même fleuve.",
+  ];
+
+  function pickMantraOfDay() {
+    // Déterministe par jour : même mantra entre 2 ouvertures du jour.
+    const day = new Date().toISOString().slice(0, 10);
+    let h = 0;
+    for (const c of day) h = (h * 31 + c.charCodeAt(0)) | 0;
+    return MANTRAS[Math.abs(h) % MANTRAS.length];
+  }
+
+  // Mood tracking (SPEC §11 Étape 9) — 4 emojis post-session.
+  const MOOD_OPTIONS = [
+    { id: 'fire',    emoji: '🔥', label: 'Galvanisé' },
+    { id: 'happy',   emoji: '🙂', label: 'Bien'      },
+    { id: 'neutral', emoji: '😐', label: 'Moyen'     },
+    { id: 'drained', emoji: '😩', label: 'Vidé'      },
+  ];
+
   // Pool de phrases fin de session (v4 patch §Microcopy variable)
   const SESSION_END_PHRASES = [
     "Endure, mon cœur.",
@@ -1825,35 +1876,112 @@
   };
 
   /* ==========================================================
-     Sas de Décompression (SPEC §11 Étape 8) — phrase mythologique
-     fade-in lent, fond très sombre, transition de 3.5s pour laisser
-     le système nerveux redescendre. Pas de pop-up suivant.
+     Sas de Décompression (SPEC §11 Étape 8) + Mood tracking (Étape 9)
+     Phase 1 (~2.5s) : phrase fade-in
+     Phase 2 (apparaît à 2.5s) : mood selector (4 emojis + skip)
+     Auto-nav à 7s si rien sélectionné.
      ========================================================== */
-  const SessionEndOverlay = ({ phrase }) => (
-    <div style={{
-      position: 'fixed', inset: 0,
-      zIndex: 150,
-      background: 'rgba(8, 10, 9, 0.96)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: 40,
-      animation: 'fade-in 800ms var(--ease-out)',
-      backdropFilter: 'blur(2px)',
-    }}>
-      <div className="greek" style={{
-        fontSize: 32,
-        color: 'var(--text-primary)',
-        fontStyle: 'italic',
-        textAlign: 'center',
-        lineHeight: 1.4,
-        animation: 'fade-in-up 1400ms var(--ease-out) 600ms backwards',
-        opacity: 0.95,
+  const SessionEndOverlay = ({ phrase, sessionId, onComplete }) => {
+    const [showMood, setShowMood] = useState(false);
+    const [moodPicked, setMoodPicked] = useState(false);
+
+    useEffect(() => {
+      const t1 = setTimeout(() => setShowMood(true), 2500);
+      const t2 = setTimeout(() => onComplete(), 7000);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
+    }, []);
+
+    const pickMood = async (moodId) => {
+      if (moodPicked) return;
+      setMoodPicked(true);
+      try {
+        if (sessionId) {
+          await db.moods.add({
+            sessionId,
+            mood: moodId,
+            loggedAt: new Date().toISOString(),
+          });
+        }
+      } catch {}
+      setTimeout(onComplete, 600);
+    };
+
+    return (
+      <div style={{
+        position: 'fixed', inset: 0,
+        zIndex: 150,
+        background: 'rgba(8, 10, 9, 0.96)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 32,
+        padding: 40,
+        animation: 'fade-in 800ms var(--ease-out)',
+        backdropFilter: 'blur(2px)',
       }}>
-        {phrase}
+        <div className="greek" style={{
+          fontSize: 32,
+          color: 'var(--text-primary)',
+          fontStyle: 'italic',
+          textAlign: 'center',
+          lineHeight: 1.4,
+          animation: 'fade-in-up 1400ms var(--ease-out) 600ms backwards',
+          opacity: 0.95,
+        }}>
+          {phrase}
+        </div>
+        {showMood && !moodPicked && (
+          <div style={{
+            animation: 'fade-in-up 600ms var(--ease-out)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 14,
+          }}>
+            <div style={{
+              fontSize: 11,
+              color: 'var(--text-tertiary)',
+              textTransform: 'uppercase',
+              letterSpacing: '2px',
+              fontWeight: 700,
+            }}>Comment tu te sens ?</div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              {MOOD_OPTIONS.map(m => (
+                <button key={m.id} type="button" onClick={() => pickMood(m.id)}
+                  aria-label={m.label}
+                  style={{
+                    width: 56, height: 56,
+                    fontSize: 28,
+                    background: 'var(--bg-surface)',
+                    border: '1px solid var(--border-strong)',
+                    borderRadius: 14,
+                    cursor: 'pointer',
+                    transition: 'transform var(--dur-fast) var(--ease-out)',
+                  }}
+                  onMouseDown={e => e.currentTarget.style.transform = 'scale(0.92)'}
+                  onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+                  onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
+                >{m.emoji}</button>
+              ))}
+            </div>
+            <button type="button" onClick={onComplete}
+              style={{
+                marginTop: 4,
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-tertiary)',
+                fontSize: 11,
+                letterSpacing: '1.5px',
+                textTransform: 'uppercase',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}>Skip</button>
+          </div>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   /* ==========================================================
      Web Audio helpers — sons synthétiques discrets (lyre/cloche/beep).
@@ -2356,6 +2484,7 @@
     const streak = useStreak(streakTick);
 
     const [endPhrase, setEndPhrase] = useState(null);
+    const [endingSessionId, setEndingSessionId] = useState(null);
     const [terminating, setTerminating] = useState(false);
     const [recentBadges, setRecentBadges] = useState([]); // queue de badges fraîchement débloqués
     const onBadgesUnlocked = useCallback((newly) => {
@@ -2380,13 +2509,15 @@
     const onTerminate = async () => {
       if (!canTerminate || terminating) return;
       setTerminating(true);
-      // Marquer la session comme complétée
+      // Marquer la session comme complétée + récupérer son id pour le mood
+      let sessionRowId = null;
       try {
         const existing = await db.sessions.where({ week, sessionDay: day.sessionDay }).first();
         if (existing) {
           await db.sessions.update(existing.id, { completedAt: new Date().toISOString(), syncedAt: null });
+          sessionRowId = existing.id;
         } else {
-          await db.sessions.add({
+          sessionRowId = await db.sessions.add({
             week, sessionDay: day.sessionDay,
             startedAt: new Date().toISOString(),
             completedAt: new Date().toISOString(),
@@ -2394,6 +2525,7 @@
           });
         }
       } catch {}
+      setEndingSessionId(sessionRowId);
       // Bump streak (1× par jour max — multiples sessions le même jour ne cumulent pas)
       try { await bumpStreak(); } catch {}
       setStreakTick(t => t + 1);
@@ -2405,20 +2537,33 @@
       // Pioche phrase et l'affiche
       const phrase = await pickEndPhrase();
       setEndPhrase(phrase);
-      // Sync en arrière-plan pendant les 2s d'overlay
+      // Sync en arrière-plan pendant le sas de décompression
       syncPendingSets().catch(() => {});
-      // Navigation auto vers /semaine après 3.5s — Sas de Décompression
-      // (spec Étape 8 : transition lente pour laisser le SN redescendre)
-      setTimeout(() => {
-        setEndPhrase(null);
-        setTerminating(false);
-        navigate(ROUTES.SEMAINE);
-      }, 3500);
+      // La nav est désormais déclenchée par SessionEndOverlay (mood picked
+      // ou timeout 7s) — voir handleEndComplete ci-dessous.
     };
+
+    const handleEndComplete = useCallback(() => {
+      setEndPhrase(null);
+      setEndingSessionId(null);
+      setTerminating(false);
+      navigate(ROUTES.SEMAINE);
+    }, [navigate]);
 
     return (
       <>
         <PageWrap title={day.label} subtitle={`${day.fr} · Bloc ${block.id} · ${block.name} · Sem ${week}/${block.weeks[1]}`}>
+          <div className="greek" style={{
+            marginBottom: 14,
+            fontSize: 14,
+            fontStyle: 'italic',
+            color: 'var(--text-secondary)',
+            textAlign: 'center',
+            lineHeight: 1.4,
+            opacity: 0.85,
+          }}>
+            « {pickMantraOfDay()} »
+          </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <AthxCountdown />
             {streak && <StreakBadge streak={streak} />}
@@ -2517,7 +2662,13 @@
             </>
           )}
         </PageWrap>
-        {endPhrase && <SessionEndOverlay phrase={endPhrase} />}
+        {endPhrase && (
+          <SessionEndOverlay
+            phrase={endPhrase}
+            sessionId={endingSessionId}
+            onComplete={handleEndComplete}
+          />
+        )}
         {recentBadges.length > 0 && (
           <BadgeToast
             badge={recentBadges[0]}
