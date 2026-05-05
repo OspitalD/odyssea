@@ -791,11 +791,18 @@
     const sessionBest = bestE1RM(sets || []);
 
     const nextSetNumber = (sets?.length || 0) + 1;
+    // PR aperçu : preview > meilleur e1RM historique (TOUTES sessions confondues
+    // pour cet exo). Premier set ever : pas de PR (historicalBest = 0).
     const isPreviewPR = historicalBest != null && historicalBest > 0 && previewE1RM > historicalBest;
+
+    // Flash visuel sur le bouton (cross-platform, marche sur iOS contrairement
+    // à navigator.vibrate qui n'existe pas sur Safari/iOS PWA).
+    const [flash, setFlash] = useState(false);
 
     const validate = async () => {
       if (weight <= 0 || reps <= 0) return;
       const e1RM = round05(epley(weight, reps));
+      const isPR = historicalBest != null && historicalBest > 0 && e1RM > historicalBest;
       await db.sets.add({
         week,
         sessionDay,
@@ -804,10 +811,16 @@
         setNumber: nextSetNumber,
         weight, reps, rir,
         e1RM,
+        isPR,
         completedAt: new Date().toISOString(),
         syncedAt: null,
       });
-      try { navigator.vibrate && navigator.vibrate(20); } catch {}
+      // Haptic Android (no-op silencieux sur iOS — la Web Vibration API n'y
+      // est pas implémentée par Apple).
+      try { navigator.vibrate && navigator.vibrate(isPR ? [30, 50, 60] : 20); } catch {}
+      // Flash 250ms — feedback visuel garanti sur toute plateforme.
+      setFlash(true);
+      setTimeout(() => setFlash(false), 250);
       onSetValidated();
     };
 
@@ -890,8 +903,8 @@
                       display: 'flex', alignItems: 'center', gap: 10,
                       fontSize: 13,
                       padding: '8px 12px',
-                      background: 'var(--bg-primary)',
-                      border: '1px solid var(--border-subtle)',
+                      background: s.isPR ? 'rgba(232,160,32,0.08)' : 'var(--bg-primary)',
+                      border: `1px solid ${s.isPR ? 'rgba(232,160,32,0.4)' : 'var(--border-subtle)'}`,
                       borderRadius: 10,
                     }}>
                       <span style={{ color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 700, minWidth: 24 }}>#{s.setNumber}</span>
@@ -899,7 +912,10 @@
                       <span style={{ color: 'var(--text-secondary)' }}>×{s.reps}</span>
                       <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>RIR {s.rir}</span>
                       <span style={{ flex: 1 }} />
-                      <span style={{ color: 'var(--accent-laurel)', fontSize: 11, fontWeight: 700 }}>e1RM {s.e1RM}</span>
+                      {s.isPR && (
+                        <span style={{ color: 'var(--accent-olympus)', fontSize: 13, fontWeight: 800 }} title="PR — nouvel e1RM record">★</span>
+                      )}
+                      <span style={{ color: s.isPR ? 'var(--accent-olympus)' : 'var(--accent-laurel)', fontSize: 11, fontWeight: 700 }}>e1RM {s.e1RM}</span>
                     </li>
                   );
                 })}
@@ -948,15 +964,20 @@
                 <RirToggle value={rir} onChange={setRir} />
               </div>
 
-              {/* Bouton validation */}
+              {/* Bouton validation. Flash 250ms après tap = feedback cross-plateforme
+                  (la vibration ne marche que sur Android). */}
               <button
                 type="button"
                 onClick={validate}
                 disabled={weight <= 0 || reps <= 0}
                 style={{
                   width: '100%',
-                  background: weight > 0 && reps > 0 ? 'var(--accent-laurel)' : 'var(--bg-surface-hover)',
-                  color: weight > 0 && reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)',
+                  background: flash
+                    ? '#FFFFFF'
+                    : (weight > 0 && reps > 0 ? 'var(--accent-laurel)' : 'var(--bg-surface-hover)'),
+                  color: flash
+                    ? '#0D0F0E'
+                    : (weight > 0 && reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
                   border: 'none',
                   borderRadius: 12,
                   padding: '14px 0',
@@ -965,7 +986,10 @@
                   letterSpacing: '1.5px',
                   textTransform: 'uppercase',
                   cursor: weight > 0 && reps > 0 ? 'pointer' : 'not-allowed',
-                  transition: 'all var(--dur-fast) var(--ease-out)',
+                  transform: flash ? 'scale(0.98)' : 'scale(1)',
+                  transition: flash
+                    ? 'background var(--dur-fast), color var(--dur-fast), transform var(--dur-fast)'
+                    : 'background var(--dur-normal) var(--ease-out), color var(--dur-normal) var(--ease-out), transform var(--dur-normal) var(--ease-out)',
                 }}
               >Valider set</button>
             </div>
