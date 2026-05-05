@@ -150,12 +150,12 @@
   </noscript>
 
   <!-- ============================================================
-       VENDOR (CDN) — React 18 + Babel standalone (pattern mobility-dashboard)
-       Dexie sera ajouté Mer 6 (Niveau 0 data layer).
+       VENDOR (CDN) — React 18 + Babel standalone + Dexie (IndexedDB)
        ============================================================ -->
   <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+  <script src="https://unpkg.com/dexie@4.0.10/dist/dexie.min.js"></script>
 
   <!-- ============================================================
        APPLICATION
@@ -218,6 +218,23 @@
   ];
 
   /* ==========================================================
+     SESSION DAY LAYOUT — 7 jours de la semaine
+     Mon/Wed/Fri/Sat = strength (sessionDay côté API)
+     Tue/Thu/Sun = light/off (label uniquement, pas de programme API)
+     ========================================================== */
+  const PROGRAMME_START = '2026-05-11'; // Lundi 11 mai 2026 = J1 Block 1 Sem 1
+
+  const WEEK_DAYS = [
+    { idx: 1, fr: 'Lundi',    en: 'Monday',    sessionDay: 'Monday',    label: 'Strength 1',           strength: true  },
+    { idx: 2, fr: 'Mardi',    en: 'Tuesday',   sessionDay: null,        label: 'Aérobie + bras + abs', strength: false },
+    { idx: 3, fr: 'Mercredi', en: 'Wednesday', sessionDay: 'Wednesday', label: 'Strength 2',           strength: true  },
+    { idx: 4, fr: 'Jeudi',    en: 'Thursday',  sessionDay: null,        label: 'Sprints + Anaérobie',  strength: false },
+    { idx: 5, fr: 'Vendredi', en: 'Friday',    sessionDay: 'Friday',    label: 'Strength 3',           strength: true  },
+    { idx: 6, fr: 'Samedi',   en: 'Saturday',  sessionDay: 'Saturday',  label: 'Upper Body',           strength: true  },
+    { idx: 0, fr: 'Dimanche', en: 'Sunday',    sessionDay: null,        label: 'Off / Light',          strength: false },
+  ];
+
+  /* ==========================================================
      UTILS
      ========================================================== */
   const daysUntil = (isoDate) => {
@@ -226,6 +243,18 @@
     now.setHours(0, 0, 0, 0);
     return Math.max(0, Math.round((target - now) / 86400000));
   };
+
+  // Semaine courante (1..20). Pré-démarrage = 1, post-fin = 20.
+  const getCurrentWeek = () => {
+    const start = new Date(PROGRAMME_START + 'T00:00:00');
+    const now = new Date();
+    if (now < start) return 1;
+    const days = Math.floor((now - start) / 86400000);
+    return Math.max(1, Math.min(20, Math.floor(days / 7) + 1));
+  };
+
+  // Jour courant en idx 0..6 (dimanche..samedi convention JS).
+  const getCurrentWeekDayIdx = () => new Date().getDay();
 
   const getCurrentBlock = (week) => {
     return BLOCKS.find(b => week >= b.weeks[0] && week <= b.weeks[1]) || BLOCKS[0];
@@ -240,9 +269,95 @@
   };
 
   /* ==========================================================
-     Mini hash router — pattern mobility-dashboard
+     DATA LAYER — Dexie / IndexedDB (SPEC v5 §9)
+     Schéma complet anticipé pour Phase 2 et 3 (évite migrations lourdes).
+     ========================================================== */
+  const db = new Dexie('Odyssea');
+  db.version(1).stores({
+    sets:         '++id, [week+sessionDay+exerciseSlot+setNumber], week, sessionDay, exerciseSlot, completedAt, syncedAt',
+    sessions:     '++id, [week+sessionDay], week, sessionDay, completedAt, syncedAt',
+    programme:    '++id, [week+sessionDay+exerciseSlot], block, week, sessionDay',
+    oneRMs:       '++id, exerciseName, computedAt',
+    streak:       '++id',
+    badges:       '++id, badgeId, unlockedAt',
+    prefs:        'key',
+    rewards:      '++id, milestoneId, unlockedAt, claimedAt',
+    mantrasSeen:  '++id, mantraId, seenAt',
+    moods:        '++id, sessionId, loggedAt',
+  });
+
+  // Singleton de protection contre les seeds concurrents au boot.
+  let seedInFlight = null;
+
+  // Seed du `programme` table depuis l'API si vide. Idempotent : no-op
+  // si déjà rempli. En cas d'erreur réseau, on ne marque rien et on
+  // retentera au prochain démarrage.
+  async function seedIfEmpty() {
+    if (seedInFlight) return seedInFlight;
+    seedInFlight = (async () => {
+      const count = await db.programme.count();
+      if (count > 0) return { ok: true, skipped: true, count };
+      try {
+        const res = await fetch(API_URL, {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'readWeek', week: 1 }),
+          method: 'POST',
+        });
+        const data = await res.json();
+        if (!data || !data.ok || !data.sessions) {
+          throw new Error(data && data.error || 'Réponse API invalide');
+        }
+        const block = getCurrentBlock(1).id;
+        const rows = [];
+        for (const sess of data.sessions) {
+          for (const ex of (sess.exercises || [])) {
+            rows.push({
+              block,
+              week: data.week,
+              sessionDay: sess.day,
+              exerciseSlot: ex.slot,
+              exerciseName: ex.name || '',
+              prescription: ex.prescription || '',
+            });
+          }
+        }
+        await db.programme.bulkAdd(rows);
+        await db.prefs.put({ key: 'lastSeedAt', value: new Date().toISOString() });
+        return { ok: true, count: rows.length };
+      } catch (e) {
+        await db.prefs.put({ key: 'lastSeedError', value: { message: String(e), at: new Date().toISOString() } });
+        return { ok: false, error: String(e) };
+      }
+    })();
+    try { return await seedInFlight; } finally { seedInFlight = null; }
+  }
+
+  // Hook : lit le programme d'une semaine groupé par jour.
+  // Reactif sur `week` ; rafraîchit aussi quand un seed se termine.
+  const useWeekProgramme = (week, refreshKey = 0) => {
+    const [byDay, setByDay] = useState(null);
+    useEffect(() => {
+      let alive = true;
+      db.programme.where('week').equals(week).toArray().then(rows => {
+        if (!alive) return;
+        rows.sort((a, b) => a.exerciseSlot - b.exerciseSlot);
+        const grouped = {};
+        for (const r of rows) (grouped[r.sessionDay] ||= []).push(r);
+        setByDay(grouped);
+      });
+      return () => { alive = false; };
+    }, [week, refreshKey]);
+    return byDay;
+  };
+
+  /* ==========================================================
+     Contextes globaux
      ========================================================== */
   const RouterContext = createContext({ path: DEFAULT_ROUTE, query: {}, navigate: () => {} });
+  // Tick incrémenté quand seedIfEmpty() vient de seed des données → invalide
+  // les caches des hooks DB (useWeekProgramme & co).
+  const SeedContext = createContext(0);
+  const useSeedTick = () => useContext(SeedContext);
 
   const parseHash = () => {
     const raw = (window.location.hash || '').replace(/^#/, '');
@@ -506,35 +621,146 @@
      - /reglages   → Ven : ATHX date, sons, reset, export
      ========================================================== */
   const AujourdhuiPage = () => {
-    // Mock : on sera Sem 1, Block 1, Lundi (Strength 1) lundi 11 mai.
-    const week = 1;
+    const { query } = useLocation();
+    const week = getCurrentWeek();
     const block = getCurrentBlock(week);
+    const todayDay = WEEK_DAYS.find(d => d.idx === getCurrentWeekDayIdx());
+    // Si query.day passé (depuis /semaine), on l'utilise. Sinon, jour courant
+    // si c'est un jour strength, fallback sur le prochain jour strength.
+    const requestedDay = query.day || (todayDay?.strength ? todayDay.sessionDay : null);
+    const day = WEEK_DAYS.find(d => d.sessionDay === requestedDay) || WEEK_DAYS[0]; // fallback Lundi
+    const programmeByDay = useWeekProgramme(week, useSeedTick());
+    const exos = (programmeByDay && day.sessionDay) ? (programmeByDay[day.sessionDay] || []) : null;
+
     return (
-      <PageWrap title="Aujourd'hui" subtitle={`Bloc ${block.id} · ${block.name} · Sem ${week}/${block.weeks[1]}`}>
+      <PageWrap title={day.label} subtitle={`${day.fr} · Bloc ${block.id} · ${block.name} · Sem ${week}/${block.weeks[1]}`}>
         <AthxCountdown />
-        <Card style={{ marginTop: 12 }}>
-          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
-            Niveau 0 — saisie set
-          </div>
-          <div style={{ color: 'var(--text-primary)' }}>
-            Steppers Weight / Reps / RIR + calculs Epley + Stress Index — implémentation Jeu 7 mai.
-          </div>
-        </Card>
+        {!day.strength ? (
+          <Card style={{ marginTop: 12 }}>
+            <div style={{ color: 'var(--text-secondary)' }}>
+              Pas de session strength aujourd'hui. {day.label}.
+            </div>
+          </Card>
+        ) : exos === null ? (
+          <Card style={{ marginTop: 12 }}><div style={{ color: 'var(--text-secondary)' }}>Chargement du programme…</div></Card>
+        ) : exos.length === 0 ? (
+          <Card style={{ marginTop: 12 }}>
+            <div style={{ color: 'var(--accent-blood)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>
+              Programme non chargé
+            </div>
+            <div style={{ color: 'var(--text-secondary)' }}>Reconnecte-toi pour charger la session.</div>
+          </Card>
+        ) : (
+          exos.map(ex => (
+            <Card key={ex.id} style={{ marginTop: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+                  Slot {ex.exerciseSlot}
+                </div>
+              </div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>
+                {ex.exerciseName}
+              </div>
+              {ex.prescription && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'pre-line', lineHeight: 1.5 }}>
+                  {ex.prescription}
+                </div>
+              )}
+              <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+                Saisie set : Étape 3.
+              </div>
+            </Card>
+          ))
+        )}
       </PageWrap>
     );
   };
 
+  const DayCard = ({ day, programme, isToday, onTap }) => {
+    const exos = programme || [];
+    const isClickable = day.strength && exos.length > 0;
+    const accentColor = isToday ? 'var(--accent-laurel)' : day.strength ? 'var(--text-primary)' : 'var(--text-secondary)';
+    return (
+      <button
+        type="button"
+        onClick={isClickable ? onTap : undefined}
+        disabled={!isClickable}
+        style={{
+          width: '100%',
+          textAlign: 'left',
+          background: 'var(--bg-surface)',
+          border: `1px solid ${isToday ? 'var(--accent-laurel)' : 'var(--border-subtle)'}`,
+          borderRadius: 14,
+          padding: 14,
+          marginTop: 10,
+          color: 'inherit',
+          cursor: isClickable ? 'pointer' : 'default',
+          opacity: day.strength ? 1 : 0.6,
+          transition: 'border-color var(--dur-fast) var(--ease-out)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: exos.length ? 10 : 0 }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+              {day.fr}
+            </div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: accentColor, marginTop: 2 }}>
+              {day.label}
+            </div>
+          </div>
+          <div style={{ fontSize: 18, color: accentColor }} aria-label={isToday ? 'aujourd’hui' : ''}>
+            {isToday ? '⏰' : day.strength ? '⏳' : '·'}
+          </div>
+        </div>
+        {exos.length > 0 && (
+          <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {exos.map(ex => (
+              <li key={ex.id} style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                <span style={{ color: 'var(--text-tertiary)', marginRight: 6 }}>{ex.exerciseSlot}.</span>
+                {ex.exerciseName}
+              </li>
+            ))}
+          </ul>
+        )}
+      </button>
+    );
+  };
+
   const SemainePage = () => {
-    const week = 1;
+    const week = getCurrentWeek();
     const block = getCurrentBlock(week);
+    const programmeByDay = useWeekProgramme(week, useSeedTick());
+    const todayIdx = getCurrentWeekDayIdx();
+    const navigate = useNavigate();
+
+    const empty = programmeByDay && Object.keys(programmeByDay).length === 0;
+
     return (
       <PageWrap title="Semaine" subtitle={`Bloc ${block.id} · ${block.name} · Sem ${week}/${block.weeks[1]}`}>
-        <Card>
-          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
-            Niveau 0 — vue 7 jours
-          </div>
-          7 cards jour avec statuts ✓ / ⏰ / ⏳ — implémentation Mer 6 mai (avec seed Block 1 IndexedDB).
-        </Card>
+        {programmeByDay === null && (
+          <Card>
+            <div style={{ color: 'var(--text-secondary)' }}>Chargement…</div>
+          </Card>
+        )}
+        {empty && (
+          <Card>
+            <div style={{ color: 'var(--accent-blood)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>
+              Programme non chargé
+            </div>
+            <div style={{ color: 'var(--text-secondary)' }}>
+              Reconnecte-toi à internet et rouvre l'app : le programme se chargera au prochain démarrage.
+            </div>
+          </Card>
+        )}
+        {programmeByDay && !empty && WEEK_DAYS.map(day => (
+          <DayCard
+            key={day.idx}
+            day={day}
+            programme={day.sessionDay ? programmeByDay[day.sessionDay] : null}
+            isToday={day.idx === todayIdx}
+            onTap={() => navigate(`${ROUTES.AUJOURDHUI}?day=${day.sessionDay}`)}
+          />
+        ))}
       </PageWrap>
     );
   };
@@ -631,25 +857,37 @@
   }
 
   /* ==========================================================
-     APP
+     APP — démarre seedIfEmpty() au mount, force re-render des
+     pages dépendantes une fois résolu.
      ========================================================== */
-  const App = () => (
-    <HashRouter>
-      <div className="app-shell">
-        <AppHeader />
-        <main className="app-main">
-          <Routes>
-            <Route path={ROUTES.AUJOURDHUI} element={<AujourdhuiPage />} />
-            <Route path={ROUTES.SEMAINE}    element={<SemainePage />} />
-            <Route path={ROUTES.STATS}      element={<StatsPage />} />
-            <Route path={ROUTES.REGLAGES}   element={<ReglagesPage />} />
-            <Route path="*" element={<AujourdhuiPage />} />
-          </Routes>
-        </main>
-        <BottomNav />
-      </div>
-    </HashRouter>
-  );
+  const App = () => {
+    const [seedTick, setSeedTick] = useState(0);
+    useEffect(() => {
+      seedIfEmpty().then(r => {
+        if (r.ok && !r.skipped) setSeedTick(t => t + 1);
+      });
+    }, []);
+
+    return (
+      <SeedContext.Provider value={seedTick}>
+        <HashRouter>
+          <div className="app-shell">
+            <AppHeader />
+            <main className="app-main">
+              <Routes>
+                <Route path={ROUTES.AUJOURDHUI} element={<AujourdhuiPage />} />
+                <Route path={ROUTES.SEMAINE}    element={<SemainePage />} />
+                <Route path={ROUTES.STATS}      element={<StatsPage />} />
+                <Route path={ROUTES.REGLAGES}   element={<ReglagesPage />} />
+                <Route path="*" element={<AujourdhuiPage />} />
+              </Routes>
+            </main>
+            <BottomNav />
+          </div>
+        </HashRouter>
+      </SeedContext.Provider>
+    );
+  };
 
   const root = ReactDOM.createRoot(document.getElementById('root'));
   root.render(<App />);
