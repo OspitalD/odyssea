@@ -6,5 +6,11 @@
   "description": "Odyssea — Ὀδύσσεια. PWA single-file React+Babel zero-build. 20 semaines, 4 chants, 1 destination : ATHX Marseille.",
   "engines": {
     "node": ">=20"
+  },
+  "scripts": {
+    "icons": "node scripts/generate-icons.mjs"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2"
   }
 }
