@@ -398,6 +398,130 @@
     return [bySlot, refresh];
   };
 
+  /* ==========================================================
+     SYNC LAYER — POST writeSet vers Apps Script
+     ========================================================== */
+  async function postWriteSet(set) {
+    // CORS-safe : pas de Content-Type explicite (cf. seedIfEmpty).
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'writeSet',
+        week: set.week,
+        sessionDay: set.sessionDay,
+        exerciseSlot: set.exerciseSlot,
+        setNumber: set.setNumber,
+        weight: set.weight,
+        reps: set.reps,
+        rir: set.rir,
+      }),
+    });
+    const data = await res.json();
+    if (!data || !data.ok) throw new Error((data && data.error) || 'writeSet failed');
+    return data;
+  }
+
+  // Sync de tous les sets non-syncés. Retourne {success, fail}.
+  // Appelé au boot (si online) et à chaque tap TERMINER.
+  async function syncPendingSets() {
+    if (!navigator.onLine) return { success: 0, fail: 0, skipped: 'offline' };
+    const all = await db.sets.toArray();
+    const unsynced = all.filter(s => !s.syncedAt);
+    let success = 0, fail = 0;
+    for (const set of unsynced) {
+      try {
+        await postWriteSet(set);
+        await db.sets.update(set.id, { syncedAt: new Date().toISOString() });
+        success++;
+      } catch (e) {
+        fail++;
+      }
+    }
+    return { success, fail, total: unsynced.length };
+  }
+
+  /* ==========================================================
+     STREAK SYSTEM (SPEC v5 §7.2)
+     - Tolérance 4 jours : ≤ 4 j sans session = streak continue
+     - > 4 j sans session = streak break, repart à 1
+     - 1 incrément par jour max (multiples sessions/jour ne cumulent pas)
+     ========================================================== */
+  const STREAK_BREAK_THRESHOLD = 4; // jours
+  const STREAK_WARN_THRESHOLD = 3;  // alerte Lotophages à J3
+
+  async function getStreak() {
+    let row = await db.streak.get(1);
+    if (!row) {
+      row = {
+        id: 1,
+        currentStreak: 0,
+        longestStreak: 0,
+        lastSessionDate: null,
+        currentRank: STREAK_RANKS[0].name,
+        pardonsAvailable: 0,
+        pardonsUsed: 0,
+      };
+      await db.streak.put(row);
+    }
+    return row;
+  }
+
+  // Bump streak après une session validée. Retourne le nouveau streak.
+  async function bumpStreak() {
+    const todayIso = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const row = await getStreak();
+    if (row.lastSessionDate === todayIso) return row; // déjà bumpé aujourd'hui
+    let next = 1;
+    if (row.lastSessionDate) {
+      const last = new Date(row.lastSessionDate);
+      const today = new Date(todayIso);
+      const days = Math.round((today - last) / 86400000);
+      next = days > STREAK_BREAK_THRESHOLD ? 1 : (row.currentStreak + 1);
+    }
+    const updated = {
+      ...row,
+      currentStreak: next,
+      longestStreak: Math.max(row.longestStreak, next),
+      lastSessionDate: todayIso,
+      currentRank: getRank(next).name,
+    };
+    await db.streak.put(updated);
+    return updated;
+  }
+
+  // À J3 sans session strength : warning "Ne sois pas Ulysse aux Lotophages"
+  function daysSinceLastSession(streak) {
+    if (!streak?.lastSessionDate) return null;
+    const last = new Date(streak.lastSessionDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.round((today - last) / 86400000);
+  }
+
+  /* ==========================================================
+     END PHRASE (SPEC v5 §7.1 + v4 patch)
+     Pioche aléatoire dans SESSION_END_PHRASES, jamais 2× d'affilée.
+     ========================================================== */
+  async function pickEndPhrase() {
+    const last = await db.prefs.get('lastEndPhrase');
+    const lastValue = last?.value;
+    const candidates = SESSION_END_PHRASES.filter(p => p !== lastValue);
+    const phrase = candidates[Math.floor(Math.random() * candidates.length)];
+    await db.prefs.put({ key: 'lastEndPhrase', value: phrase });
+    return phrase;
+  }
+
+  // Hook : streak réactif. Refresh à chaque incrément manuel via tick.
+  const useStreak = (refreshKey = 0) => {
+    const [streak, setStreak] = useState(null);
+    useEffect(() => {
+      let alive = true;
+      getStreak().then(s => { if (alive) setStreak(s); });
+      return () => { alive = false; };
+    }, [refreshKey]);
+    return streak;
+  };
+
   // Hook : best e1RM historique pour un exo donné (sert d'e1RM_known).
   const useBestE1RMFor = (exerciseName, refreshKey) => {
     const [best, setBest] = useState(null);
@@ -633,23 +757,68 @@
   };
 
   /* ==========================================================
-     Compte à rebours ATHX (Ithaque)
+     Compte à rebours ATHX (Ithaque) + StreakBadge
      ========================================================== */
   const AthxCountdown = () => {
     const days = daysUntil(ATHX_DATE);
     return (
       <div style={{
+        flex: 1,
         display: 'flex', alignItems: 'baseline', gap: 8,
-        padding: '12px 16px',
+        padding: '12px 14px',
         background: 'var(--bg-surface)',
         border: '1px solid var(--border-subtle)',
         borderRadius: 14,
         color: 'var(--accent-olympus)',
       }}>
-        <span style={{ fontSize: 26, fontWeight: 800, letterSpacing: '-0.5px' }}>{days}</span>
-        <span style={{ fontSize: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
-          jours → Ithaque
+        <span style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.5px' }}>{days}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.2px', fontWeight: 700 }}>
+          j → Ithaque
         </span>
+      </div>
+    );
+  };
+
+  // Pill compact : nom du rang + streak en cours, couleur token du rang.
+  const StreakBadge = ({ streak }) => {
+    if (!streak) return null;
+    const rank = getRank(streak.currentStreak);
+    return (
+      <div style={{
+        flex: '0 0 auto',
+        display: 'flex', alignItems: 'baseline', gap: 6,
+        padding: '12px 14px',
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 14,
+        color: rank.token,
+      }}>
+        <span style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.5px' }}>{streak.currentStreak}</span>
+        <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.2px', fontWeight: 700 }}>
+          {rank.name}
+        </span>
+      </div>
+    );
+  };
+
+  // Bandeau d'alerte Lotophages — apparaît à J3 sans session strength
+  // (J4 tolérance étant la dernière limite avant break).
+  const LotophagesWarning = ({ streak }) => {
+    const days = daysSinceLastSession(streak);
+    if (days === null || days < STREAK_WARN_THRESHOLD || days > STREAK_BREAK_THRESHOLD) return null;
+    return (
+      <div className="greek" style={{
+        marginTop: 10,
+        padding: '10px 14px',
+        background: 'rgba(232,160,32,0.08)',
+        border: '1px solid rgba(232,160,32,0.3)',
+        borderRadius: 12,
+        fontSize: 14,
+        color: 'var(--accent-olympus)',
+        fontStyle: 'italic',
+        textAlign: 'center',
+      }}>
+        Ne sois pas Ulysse aux Lotophages.
       </div>
     );
   };
@@ -728,6 +897,86 @@
       </div>
     );
   };
+
+  /* ==========================================================
+     Splash première ouverture — "Le voyage commence."
+     Flag localStorage.odyssea_onboarded. Auto-dismiss au tap.
+     ========================================================== */
+  const ONBOARD_KEY = 'odyssea_onboarded';
+
+  const Splash = ({ onDismiss }) => (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onDismiss}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onDismiss(); }}
+      style={{
+        position: 'fixed', inset: 0,
+        zIndex: 200,
+        background: 'var(--bg-primary)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 24,
+        cursor: 'pointer',
+        animation: 'fade-in var(--dur-normal) var(--ease-out)',
+      }}
+    >
+      <div className="greek" style={{
+        fontSize: 120,
+        color: 'var(--accent-olympus)',
+        fontStyle: 'italic',
+        lineHeight: 1,
+        letterSpacing: '-3px',
+      }}>Ω</div>
+      <div className="greek" style={{
+        fontSize: 28,
+        color: 'var(--text-primary)',
+        fontStyle: 'italic',
+        textAlign: 'center',
+        padding: '0 32px',
+      }}>Le voyage commence.</div>
+      <div style={{
+        marginTop: 12,
+        fontSize: 11,
+        color: 'var(--text-tertiary)',
+        textTransform: 'uppercase',
+        letterSpacing: '2px',
+        fontWeight: 700,
+      }}>
+        tap pour entrer
+      </div>
+    </div>
+  );
+
+  /* ==========================================================
+     SessionEndOverlay — phrase mythologique fade-in 300ms,
+     reste 2s puis transition vers /semaine.
+     ========================================================== */
+  const SessionEndOverlay = ({ phrase }) => (
+    <div style={{
+      position: 'fixed', inset: 0,
+      zIndex: 150,
+      background: 'rgba(13, 15, 14, 0.92)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 32,
+      animation: 'fade-in var(--dur-normal) var(--ease-out)',
+    }}>
+      <div className="greek" style={{
+        fontSize: 32,
+        color: 'var(--text-primary)',
+        fontStyle: 'italic',
+        textAlign: 'center',
+        lineHeight: 1.3,
+        animation: 'fade-in-up 600ms var(--ease-out) 300ms backwards',
+      }}>
+        {phrase}
+      </div>
+    </div>
+  );
 
   // RIR toggle : 6 cercles 0..5. Le sélectionné est rempli en --accent-laurel.
   // Convention : 0 = à l'échec, 5 = très facile.
@@ -1001,6 +1250,7 @@
 
   const AujourdhuiPage = () => {
     const { query } = useLocation();
+    const navigate = useNavigate();
     const week = getCurrentWeek();
     const block = getCurrentBlock(week);
     const todayDay = WEEK_DAYS.find(d => d.idx === getCurrentWeekDayIdx());
@@ -1010,42 +1260,131 @@
     const exos = (programmeByDay && day.sessionDay) ? (programmeByDay[day.sessionDay] || []) : null;
 
     const [setsBySlot, refreshSets] = useSetsForDay(week, day.sessionDay);
-    // Slot ouvert (premier par défaut, par §12 Étape 3 "premier ouvert").
     const [openSlot, setOpenSlot] = useState(1);
 
+    const [streakTick, setStreakTick] = useState(0);
+    const streak = useStreak(streakTick);
+
+    const [endPhrase, setEndPhrase] = useState(null);
+    const [terminating, setTerminating] = useState(false);
+
+    // Activation TERMINER : ≥1 set validé sur CHAQUE exo.
+    const canTerminate = exos && exos.length > 0 && setsBySlot &&
+      exos.every(ex => (setsBySlot[ex.exerciseSlot] || []).length > 0);
+
+    const onTerminate = async () => {
+      if (!canTerminate || terminating) return;
+      setTerminating(true);
+      // Marquer la session comme complétée
+      try {
+        const existing = await db.sessions.where({ week, sessionDay: day.sessionDay }).first();
+        if (existing) {
+          await db.sessions.update(existing.id, { completedAt: new Date().toISOString(), syncedAt: null });
+        } else {
+          await db.sessions.add({
+            week, sessionDay: day.sessionDay,
+            startedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            syncedAt: null,
+          });
+        }
+      } catch {}
+      // Bump streak (1× par jour max — multiples sessions le même jour ne cumulent pas)
+      try { await bumpStreak(); } catch {}
+      setStreakTick(t => t + 1);
+      // Pioche phrase et l'affiche
+      const phrase = await pickEndPhrase();
+      setEndPhrase(phrase);
+      // Sync en arrière-plan pendant les 2s d'overlay
+      syncPendingSets().catch(() => {});
+      // Navigation auto vers /semaine après 2.2s
+      setTimeout(() => {
+        setEndPhrase(null);
+        setTerminating(false);
+        navigate(ROUTES.SEMAINE);
+      }, 2200);
+    };
+
     return (
-      <PageWrap title={day.label} subtitle={`${day.fr} · Bloc ${block.id} · ${block.name} · Sem ${week}/${block.weeks[1]}`}>
-        <AthxCountdown />
-        {!day.strength ? (
-          <Card style={{ marginTop: 12 }}>
-            <div style={{ color: 'var(--text-secondary)' }}>
-              Pas de session strength aujourd'hui. {day.label}.
-            </div>
-          </Card>
-        ) : exos === null ? (
-          <Card style={{ marginTop: 12 }}><div style={{ color: 'var(--text-secondary)' }}>Chargement du programme…</div></Card>
-        ) : exos.length === 0 ? (
-          <Card style={{ marginTop: 12 }}>
-            <div style={{ color: 'var(--accent-blood)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>
-              Programme non chargé
-            </div>
-            <div style={{ color: 'var(--text-secondary)' }}>Reconnecte-toi pour charger la session.</div>
-          </Card>
-        ) : (
-          exos.map(ex => (
-            <ExoCard
-              key={ex.id}
-              ex={ex}
-              week={week}
-              sessionDay={day.sessionDay}
-              sets={setsBySlot ? (setsBySlot[ex.exerciseSlot] || []) : null}
-              isOpen={openSlot === ex.exerciseSlot}
-              onToggle={() => setOpenSlot(openSlot === ex.exerciseSlot ? null : ex.exerciseSlot)}
-              onSetValidated={refreshSets}
-            />
-          ))
-        )}
-      </PageWrap>
+      <>
+        <PageWrap title={day.label} subtitle={`${day.fr} · Bloc ${block.id} · ${block.name} · Sem ${week}/${block.weeks[1]}`}>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <AthxCountdown />
+            {streak && <StreakBadge streak={streak} />}
+          </div>
+          <LotophagesWarning streak={streak} />
+          {!day.strength ? (
+            <Card style={{ marginTop: 12 }}>
+              <div style={{ color: 'var(--text-secondary)' }}>
+                Pas de session strength aujourd'hui. {day.label}.
+              </div>
+            </Card>
+          ) : exos === null ? (
+            <Card style={{ marginTop: 12 }}><div style={{ color: 'var(--text-secondary)' }}>Chargement du programme…</div></Card>
+          ) : exos.length === 0 ? (
+            <Card style={{ marginTop: 12 }}>
+              <div style={{ color: 'var(--accent-blood)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>
+                Programme non chargé
+              </div>
+              <div style={{ color: 'var(--text-secondary)' }}>Reconnecte-toi pour charger la session.</div>
+            </Card>
+          ) : (
+            <>
+              {exos.map(ex => (
+                <ExoCard
+                  key={ex.id}
+                  ex={ex}
+                  week={week}
+                  sessionDay={day.sessionDay}
+                  sets={setsBySlot ? (setsBySlot[ex.exerciseSlot] || []) : null}
+                  isOpen={openSlot === ex.exerciseSlot}
+                  onToggle={() => setOpenSlot(openSlot === ex.exerciseSlot ? null : ex.exerciseSlot)}
+                  onSetValidated={refreshSets}
+                />
+              ))}
+
+              {/* Bouton TERMINER — large, fond olympus or, fixe en bas du flow.
+                  Actif uniquement quand chaque exo a ≥1 set validé. */}
+              <button
+                type="button"
+                onClick={onTerminate}
+                disabled={!canTerminate || terminating}
+                style={{
+                  width: '100%',
+                  marginTop: 20,
+                  background: canTerminate ? 'var(--accent-olympus)' : 'var(--bg-surface-hover)',
+                  color: canTerminate ? '#0D0F0E' : 'var(--text-tertiary)',
+                  border: 'none',
+                  borderRadius: 14,
+                  padding: '16px 0',
+                  fontSize: 14,
+                  fontWeight: 800,
+                  letterSpacing: '2px',
+                  textTransform: 'uppercase',
+                  cursor: canTerminate ? 'pointer' : 'not-allowed',
+                  transition: 'all var(--dur-normal) var(--ease-out)',
+                  opacity: terminating ? 0.6 : 1,
+                }}
+              >
+                {terminating ? '…' : 'Terminer'}
+              </button>
+
+              {!canTerminate && (
+                <div style={{
+                  marginTop: 8,
+                  textAlign: 'center',
+                  fontSize: 11,
+                  color: 'var(--text-tertiary)',
+                  letterSpacing: '0.5px',
+                }}>
+                  Au moins 1 set validé sur chaque exo pour terminer.
+                </div>
+              )}
+            </>
+          )}
+        </PageWrap>
+        {endPhrase && <SessionEndOverlay phrase={endPhrase} />}
+      </>
     );
   };
 
@@ -1230,16 +1569,29 @@
   }
 
   /* ==========================================================
-     APP — démarre seedIfEmpty() au mount, force re-render des
-     pages dépendantes une fois résolu.
+     APP — boot :
+     1. Splash si 1ère ouverture (flag localStorage)
+     2. seedIfEmpty() pour le programme
+     3. syncPendingSets() pour pousser les sets stockés offline
      ========================================================== */
   const App = () => {
     const [seedTick, setSeedTick] = useState(0);
+    const [showSplash, setShowSplash] = useState(() => {
+      try { return !localStorage.getItem(ONBOARD_KEY); } catch { return false; }
+    });
+
     useEffect(() => {
       seedIfEmpty().then(r => {
         if (r.ok && !r.skipped) setSeedTick(t => t + 1);
       });
+      // Sync les sets stockés offline au lancement (no-op si online et tout déjà sync).
+      syncPendingSets().catch(() => {});
     }, []);
+
+    const dismissSplash = () => {
+      try { localStorage.setItem(ONBOARD_KEY, '1'); } catch {}
+      setShowSplash(false);
+    };
 
     return (
       <SeedContext.Provider value={seedTick}>
@@ -1257,6 +1609,7 @@
             </main>
             <BottomNav />
           </div>
+          {showSplash && <Splash onDismiss={dismissSplash} />}
         </HashRouter>
       </SeedContext.Provider>
     );
