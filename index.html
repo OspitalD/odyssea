@@ -2971,6 +2971,48 @@
   };
 
   /* ==========================================================
+     Récompenses tangibles (SPEC §11 Étape 12)
+     L'utilisateur définit lui-même une récompense physique pour chaque
+     milestone (fin de bloc, palier badge, etc.). Au unlock, l'app affiche
+     ce que l'utilisateur s'était promis = contrat avec soi-même.
+     ========================================================== */
+  const REWARD_MILESTONES = [
+    { id: 'block_1_done', label: 'Bloc 1 — Lotophages dépassés' },
+    { id: 'block_2_done', label: 'Bloc 2 — Cyclope vaincu' },
+    { id: 'block_3_done', label: 'Bloc 3 — Circé acceptée' },
+    { id: 'block_4_done', label: 'Bloc 4 — Ithaque atteinte' },
+    { id: 'first_pr',     label: 'Premier PR battu' },
+    { id: 'streak_30',    label: 'Streak 30 jours · Héros' },
+    { id: 'streak_100',   label: 'Streak 100 jours · Olympien' },
+    { id: 'athx_done',    label: 'ATHX Marseille complété' },
+  ];
+
+  // Hook : load + save les rewards (description par milestoneId).
+  const useRewards = (refreshKey = 0) => {
+    const [byMilestone, setByMilestone] = useState(null);
+    useEffect(() => {
+      let alive = true;
+      db.rewards.toArray().then(rows => {
+        if (!alive) return;
+        const map = {};
+        for (const r of rows) map[r.milestoneId] = r;
+        setByMilestone(map);
+      });
+      return () => { alive = false; };
+    }, [refreshKey]);
+    return byMilestone;
+  };
+
+  async function saveReward(milestoneId, description) {
+    const existing = await db.rewards.where('milestoneId').equals(milestoneId).first();
+    if (existing) {
+      await db.rewards.update(existing.id, { description });
+    } else {
+      await db.rewards.add({ milestoneId, description, unlockedAt: null, claimedAt: null });
+    }
+  }
+
+  /* ==========================================================
      Conseil des Dieux dominical (SPEC §11 Étape 11)
      Tous les dimanches, écran spécial à l'ouverture : récap visuel de la
      semaine + suggestion narrative courte. Stocké en prefs.lastCouncilSeen.
@@ -3360,9 +3402,57 @@
           </div>
         </div>
 
+        {/* Mur des Cyclopes (Étape 12) — grid visuel des PR cumulés.
+            Plus de PR = plus de Cyclopes barrés = mur dense. */}
+        {prs && prs.length > 0 && (
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
+              Mur des Cyclopes · {prs.length} {prs.length > 1 ? 'vaincus' : 'vaincu'}
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(8, 1fr)',
+              gap: 6,
+              padding: 12,
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 14,
+            }}>
+              {prs.map((pr, idx) => (
+                <div key={pr.id}
+                  title={`${pr.exerciseName} · ${pr.weight}kg ×${pr.reps} → e1RM ${pr.e1RM} · Sem ${pr.week}`}
+                  style={{
+                    aspectRatio: '1',
+                    borderRadius: 6,
+                    background: 'rgba(232,160,32,0.12)',
+                    border: '1px solid rgba(232,160,32,0.4)',
+                    display: 'grid',
+                    placeItems: 'center',
+                    color: 'var(--accent-olympus)',
+                    fontSize: 14,
+                    fontWeight: 800,
+                    cursor: 'help',
+                    transition: 'transform var(--dur-fast) var(--ease-out)',
+                    animation: `fade-in 400ms var(--ease-out) ${Math.min(idx * 30, 600)}ms backwards`,
+                  }}>★</div>
+              ))}
+              {/* Compléter la grille avec des cellules vides pour atteindre un multiple de 8 */}
+              {Array.from({ length: (8 - (prs.length % 8)) % 8 }).map((_, i) => (
+                <div key={`pad-${i}`} style={{
+                  aspectRatio: '1',
+                  borderRadius: 6,
+                  background: 'transparent',
+                  border: '1px dashed var(--border-subtle)',
+                  opacity: 0.4,
+                }} />
+              ))}
+            </div>
+          </div>
+        )}
+
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
-            Wall of PRs
+            Wall of PRs · timeline
           </div>
           {prs === null ? (
             <Card><div style={{ color: 'var(--text-secondary)' }}>Chargement…</div></Card>
@@ -3451,8 +3541,37 @@
       ok:      'var(--accent-laurel)',
       err:     'var(--accent-blood)',
     }[pingState.status];
+    // Rewards UI state
+    const [rewardsRefresh, setRewardsRefresh] = useState(0);
+    const rewards = useRewards(rewardsRefresh);
+    const [editingMilestone, setEditingMilestone] = useState(null);
+    const [editingValue, setEditingValue] = useState('');
+
+    const startEdit = (milestone) => {
+      setEditingMilestone(milestone.id);
+      setEditingValue(rewards?.[milestone.id]?.description || '');
+    };
+    const commitEdit = async () => {
+      if (editingMilestone) {
+        await saveReward(editingMilestone, editingValue.trim());
+        setEditingMilestone(null);
+        setEditingValue('');
+        setRewardsRefresh(r => r + 1);
+      }
+    };
+    const cancelEdit = () => { setEditingMilestone(null); setEditingValue(''); };
+
+    // Sounds toggle
+    const [soundsOn, setSoundsOn] = useState(isSoundsEnabled());
+    const toggleSounds = async () => {
+      const v = !soundsOn;
+      await setSoundsEnabled(v);
+      setSoundsOn(v);
+      if (v) play(soundLyre); // preview son
+    };
+
     return (
-      <PageWrap title="Réglages" subtitle="API · ATHX · sons · reset">
+      <PageWrap title="Réglages" subtitle="API · ATHX · sons · récompenses · reset">
         <Card>
           <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
             API Apps Script
@@ -3525,6 +3644,88 @@
             >{bwSaved ? '✓' : 'OK'}</button>
           </div>
         </Card>
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+            Sons
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 10 }}>
+            Lyre sur PR battu, cloche sur badge / fin de bloc, tick sur milestones timer.
+          </div>
+          <button type="button" onClick={toggleSounds}
+            style={{
+              width: '100%',
+              background: soundsOn ? 'var(--accent-laurel)' : 'transparent',
+              border: `1px solid ${soundsOn ? 'var(--accent-laurel)' : 'var(--border-strong)'}`,
+              borderRadius: 10,
+              color: soundsOn ? '#0D0F0E' : 'var(--text-primary)',
+              padding: '10px 14px',
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: '1.2px',
+              textTransform: 'uppercase',
+              cursor: 'pointer',
+            }}>{soundsOn ? '◉ Activés' : '◎ Désactivés'}</button>
+        </Card>
+
+        {/* Récompenses tangibles auto-définies (Étape 12) */}
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+            Mes récompenses
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 10 }}>
+            Promesse physique pour chaque milestone. Contrat avec toi-même.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {REWARD_MILESTONES.map(m => {
+              const reward = rewards?.[m.id];
+              const isEditing = editingMilestone === m.id;
+              return (
+                <div key={m.id} style={{
+                  background: 'var(--bg-primary)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 10,
+                  padding: '10px 12px',
+                }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>{m.label}</div>
+                  {isEditing ? (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        type="text"
+                        value={editingValue}
+                        onChange={e => setEditingValue(e.target.value)}
+                        autoFocus
+                        placeholder="Ex: t-shirt training"
+                        style={{
+                          flex: 1,
+                          background: 'var(--bg-surface)',
+                          border: '1px solid var(--border-strong)',
+                          borderRadius: 8,
+                          color: 'var(--text-primary)',
+                          padding: '6px 10px',
+                          fontSize: 12,
+                          outline: 'none',
+                        }}
+                      />
+                      <button type="button" onClick={commitEdit}
+                        style={{ background: 'var(--accent-laurel)', border: 'none', borderRadius: 8, color: '#0D0F0E', padding: '6px 12px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>OK</button>
+                      <button type="button" onClick={cancelEdit}
+                        style={{ background: 'transparent', border: '1px solid var(--border-strong)', borderRadius: 8, color: 'var(--text-secondary)', padding: '6px 10px', fontSize: 11, cursor: 'pointer' }}>×</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ flex: 1, fontSize: 12, color: reward?.description ? 'var(--accent-olympus)' : 'var(--text-tertiary)', fontStyle: reward?.description ? 'normal' : 'italic' }}>
+                        {reward?.description || 'Pas encore défini'}
+                      </div>
+                      <button type="button" onClick={() => startEdit(m)}
+                        style={{ background: 'transparent', border: '1px solid var(--border-strong)', borderRadius: 8, color: 'var(--text-secondary)', padding: '4px 10px', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', cursor: 'pointer' }}>{reward?.description ? 'Modif' : 'Définir'}</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+
         <Card style={{ marginTop: 12 }}>
           <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
             Date Ithaque
