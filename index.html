@@ -644,6 +644,40 @@
     return updated;
   }
 
+  /* ==========================================================
+     Pardon hebdo (SPEC §11 Étape 8) — 1 pardon octroyé par mois.
+     Permet de "sauter" une session manquée sans casser le streak.
+     Stocké dans streak.pardonsAvailable / pardonsUsed + lastPardonMonth.
+     ========================================================== */
+  async function ensureMonthlyPardon() {
+    const row = await getStreak();
+    const monthKey = new Date().toISOString().slice(0, 7); // YYYY-MM
+    if (row.lastPardonMonth === monthKey) return row;
+    const updated = {
+      ...row,
+      pardonsAvailable: (row.pardonsAvailable || 0) + 1,
+      lastPardonMonth: monthKey,
+    };
+    await db.streak.put(updated);
+    return updated;
+  }
+
+  // Utilise un pardon : avance lastSessionDate à aujourd'hui sans bumper le
+  // count. Le streak ne casse pas, mais ne progresse pas non plus.
+  async function usePardon() {
+    const row = await getStreak();
+    if (!row.pardonsAvailable || row.pardonsAvailable < 1) return null;
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const updated = {
+      ...row,
+      pardonsAvailable: row.pardonsAvailable - 1,
+      pardonsUsed: (row.pardonsUsed || 0) + 1,
+      lastSessionDate: todayIso, // sauve le streak du break
+    };
+    await db.streak.put(updated);
+    return updated;
+  }
+
   // À J3 sans session strength : warning "Ne sois pas Ulysse aux Lotophages"
   function daysSinceLastSession(streak) {
     if (!streak?.lastSessionDate) return null;
@@ -1179,24 +1213,50 @@
     );
   };
 
-  // Bandeau d'alerte Lotophages — apparaît à J3 sans session strength
-  // (J4 tolérance étant la dernière limite avant break).
-  const LotophagesWarning = ({ streak }) => {
+  // Bandeau d'alerte Lotophages + bouton Pardon hebdo si dispo.
+  const LotophagesWarning = ({ streak, onPardonUsed }) => {
     const days = daysSinceLastSession(streak);
     if (days === null || days < STREAK_WARN_THRESHOLD || days > STREAK_BREAK_THRESHOLD) return null;
+    const pardonsAvailable = streak?.pardonsAvailable || 0;
+    const handlePardon = async () => {
+      const updated = await usePardon();
+      if (updated && onPardonUsed) onPardonUsed();
+    };
     return (
-      <div className="greek" style={{
+      <div style={{
         marginTop: 10,
-        padding: '10px 14px',
+        padding: '12px 14px',
         background: 'rgba(232,160,32,0.08)',
         border: '1px solid rgba(232,160,32,0.3)',
         borderRadius: 12,
-        fontSize: 14,
-        color: 'var(--accent-olympus)',
-        fontStyle: 'italic',
-        textAlign: 'center',
       }}>
-        Ne sois pas Ulysse aux Lotophages.
+        <div className="greek" style={{
+          fontSize: 14,
+          color: 'var(--accent-olympus)',
+          fontStyle: 'italic',
+          textAlign: 'center',
+          marginBottom: pardonsAvailable > 0 ? 10 : 0,
+        }}>
+          Ne sois pas Ulysse aux Lotophages.
+        </div>
+        {pardonsAvailable > 0 && (
+          <button type="button" onClick={handlePardon}
+            style={{
+              width: '100%',
+              background: 'var(--accent-olympus)',
+              border: 'none',
+              borderRadius: 10,
+              color: '#0D0F0E',
+              padding: '10px 14px',
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: '1.5px',
+              textTransform: 'uppercase',
+              cursor: 'pointer',
+            }}>
+            Athéna intervient · {pardonsAvailable} pardon dispo
+          </button>
+        )}
       </div>
     );
   };
@@ -1765,27 +1825,30 @@
   };
 
   /* ==========================================================
-     SessionEndOverlay — phrase mythologique fade-in 300ms,
-     reste 2s puis transition vers /semaine.
+     Sas de Décompression (SPEC §11 Étape 8) — phrase mythologique
+     fade-in lent, fond très sombre, transition de 3.5s pour laisser
+     le système nerveux redescendre. Pas de pop-up suivant.
      ========================================================== */
   const SessionEndOverlay = ({ phrase }) => (
     <div style={{
       position: 'fixed', inset: 0,
       zIndex: 150,
-      background: 'rgba(13, 15, 14, 0.92)',
+      background: 'rgba(8, 10, 9, 0.96)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      padding: 32,
-      animation: 'fade-in var(--dur-normal) var(--ease-out)',
+      padding: 40,
+      animation: 'fade-in 800ms var(--ease-out)',
+      backdropFilter: 'blur(2px)',
     }}>
       <div className="greek" style={{
         fontSize: 32,
         color: 'var(--text-primary)',
         fontStyle: 'italic',
         textAlign: 'center',
-        lineHeight: 1.3,
-        animation: 'fade-in-up 600ms var(--ease-out) 300ms backwards',
+        lineHeight: 1.4,
+        animation: 'fade-in-up 1400ms var(--ease-out) 600ms backwards',
+        opacity: 0.95,
       }}>
         {phrase}
       </div>
@@ -2344,12 +2407,13 @@
       setEndPhrase(phrase);
       // Sync en arrière-plan pendant les 2s d'overlay
       syncPendingSets().catch(() => {});
-      // Navigation auto vers /semaine après 2.2s
+      // Navigation auto vers /semaine après 3.5s — Sas de Décompression
+      // (spec Étape 8 : transition lente pour laisser le SN redescendre)
       setTimeout(() => {
         setEndPhrase(null);
         setTerminating(false);
         navigate(ROUTES.SEMAINE);
-      }, 2200);
+      }, 3500);
     };
 
     return (
@@ -2359,7 +2423,7 @@
             <AthxCountdown />
             {streak && <StreakBadge streak={streak} />}
           </div>
-          <LotophagesWarning streak={streak} />
+          <LotophagesWarning streak={streak} onPardonUsed={() => setStreakTick(t => t + 1)} />
           {!day.strength ? (
             <Card style={{ marginTop: 12 }}>
               <div style={{ color: 'var(--text-secondary)' }}>
@@ -2886,6 +2950,10 @@
       });
       // Sync les sets stockés offline au lancement (no-op si online et tout déjà sync).
       syncPendingSets().catch(() => {});
+      // Octroie 1 pardon mensuel si le mois a changé.
+      ensureMonthlyPardon().catch(() => {});
+      // Charge la pref sons (default true).
+      loadSoundsPref().catch(() => {});
     }, []);
 
     const dismissSplash = () => {
