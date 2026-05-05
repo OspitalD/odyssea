@@ -2516,6 +2516,15 @@
       setCouncil(null);
     };
 
+    // Les Sirènes — détection idle 20 min
+    const [sirensVisible, dismissSirens] = useSirensWarning(setsBySlot, day.sessionDay);
+
+    // Le Souffle — bouton optionnel pour DL/Squat lourds
+    const [showBreath, setShowBreath] = useState(false);
+    const dayHasHeavyLift = exos && exos.some(ex =>
+      /deadlift|back squat|zercher squat/i.test(ex.exerciseName || '')
+    );
+
     // Mode Hyperfocus (SPEC §11) — fond plus dark, nav cachée, only current exo
     const [hyperfocus, setHyperfocus] = useState(false);
     useEffect(() => {
@@ -2601,6 +2610,30 @@
           {/* Compagnon symbolique : "Athéna observe" — visible quand au moins
               1 set a été validé sur la session du jour (la session est en cours). */}
           {setsBySlot && Object.values(setsBySlot).some(arr => arr.length > 0) && <AthenaPresence />}
+
+          {/* Bouton Le Souffle — visible avant le 1er set sur les sessions DL/Squat lourd */}
+          {dayHasHeavyLift && setsBySlot && Object.values(setsBySlot).every(arr => arr.length === 0) && (
+            <button type="button" onClick={() => setShowBreath(true)}
+              style={{
+                marginTop: 10,
+                width: '100%',
+                background: 'transparent',
+                border: '1px dashed var(--accent-royal)',
+                borderRadius: 10,
+                color: 'var(--accent-royal)',
+                padding: '10px 14px',
+                fontSize: 11,
+                letterSpacing: '1.5px',
+                textTransform: 'uppercase',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}>
+              ⊙ Le Souffle · respiration pré-session
+            </button>
+          )}
+
+          {/* Les Sirènes — apparait après 20 min idle */}
+          {sirensVisible && <SirensWarning onDismiss={dismissSirens} />}
 
           {/* Lien discret vers la carte du voyage */}
           <button type="button" onClick={() => navigate(ROUTES.CARTE)}
@@ -2736,6 +2769,9 @@
         )}
         {council && (
           <CouncilOverlay recap={council} onClose={closeCouncil} />
+        )}
+        {showBreath && (
+          <BreathOverlay onClose={() => setShowBreath(false)} />
         )}
       </>
     );
@@ -2969,6 +3005,186 @@
     3: "Circé transforme ce que tu es. Accepte la métamorphose, le pic est ton vrai visage.",
     4: "Ithaque approche. L'arc t'attend. Tout ce que tu as enduré, c'était pour cet instant.",
   };
+
+  /* ==========================================================
+     Le Souffle (SPEC §11 Étape 13) — respiration carrée 4-4-4-4
+     pour centrer avant session lourde. 5 cycles, animation simple.
+     ========================================================== */
+  const BreathOverlay = ({ onClose }) => {
+    const PHASES = [
+      { label: 'Inspire', dur: 4000, scale: 1.4 },
+      { label: 'Tiens',   dur: 4000, scale: 1.4 },
+      { label: 'Expire',  dur: 4000, scale: 0.8 },
+      { label: 'Tiens',   dur: 4000, scale: 0.8 },
+    ];
+    const TOTAL_CYCLES = 5;
+    const [cycle, setCycle] = useState(0);
+    const [phaseIdx, setPhaseIdx] = useState(0);
+
+    useEffect(() => {
+      if (cycle >= TOTAL_CYCLES) return;
+      const phase = PHASES[phaseIdx];
+      const t = setTimeout(() => {
+        const next = (phaseIdx + 1) % PHASES.length;
+        if (next === 0) setCycle(c => c + 1);
+        setPhaseIdx(next);
+      }, phase.dur);
+      return () => clearTimeout(t);
+    }, [phaseIdx, cycle]);
+
+    const phase = PHASES[phaseIdx];
+    const finished = cycle >= TOTAL_CYCLES;
+
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 240,
+        background: 'rgba(8,10,9,0.97)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 32,
+        padding: 32,
+        animation: 'fade-in 600ms var(--ease-out)',
+      }}>
+        <div style={{
+          fontSize: 11,
+          color: 'var(--accent-royal)',
+          textTransform: 'uppercase',
+          letterSpacing: '2px',
+          fontWeight: 800,
+        }}>Le Souffle · {finished ? 'Terminé' : `Cycle ${cycle + 1}/${TOTAL_CYCLES}`}</div>
+
+        <div style={{
+          width: 220, height: 220,
+          display: 'grid',
+          placeItems: 'center',
+          position: 'relative',
+        }}>
+          <div style={{
+            position: 'absolute',
+            width: '100%', height: '100%',
+            borderRadius: '50%',
+            border: '1.5px solid var(--accent-royal)',
+            opacity: 0.15,
+          }} />
+          <div style={{
+            width: 160, height: 160,
+            borderRadius: '50%',
+            background: 'rgba(185,144,224,0.08)',
+            border: '2px solid var(--accent-royal)',
+            transform: finished ? 'scale(1)' : `scale(${phase.scale})`,
+            transition: `transform ${phase.dur}ms cubic-bezier(0.4, 0.0, 0.2, 1)`,
+            display: 'grid',
+            placeItems: 'center',
+          }}>
+            <div className="greek" style={{
+              fontSize: 22,
+              fontStyle: 'italic',
+              color: 'var(--text-primary)',
+            }}>{finished ? 'Centré' : phase.label}</div>
+          </div>
+        </div>
+
+        <button type="button" onClick={onClose}
+          style={{
+            background: finished ? 'var(--accent-laurel)' : 'transparent',
+            border: finished ? 'none' : '1px solid var(--border-strong)',
+            borderRadius: 12,
+            color: finished ? '#0D0F0E' : 'var(--text-secondary)',
+            padding: '12px 24px',
+            fontSize: 12,
+            fontWeight: 800,
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            cursor: 'pointer',
+          }}>{finished ? 'Commencer la session' : 'Sortir'}</button>
+      </div>
+    );
+  };
+
+  /* ==========================================================
+     Les Sirènes (SPEC §11 Étape 13) — anti-distraction
+     Si une session est démarrée et quittée sans rien logger pendant
+     20 min, notif in-app subtile : "Les Sirènes t'appellent. Reviens
+     au mât." Bienveillant, mythologique, recadre.
+     ========================================================== */
+  const SIRENS_IDLE_MS = 20 * 60 * 1000;
+
+  // Hook : surveille le temps écoulé depuis le dernier set validé sur la
+  // session du jour (avec sets[] dispo). Si > 20 min ET dernier set < 60 min
+  // ET on est revenu sur l'app (visibilitychange), affiche le warning.
+  const useSirensWarning = (setsBySlot, sessionDay) => {
+    const [show, setShow] = useState(false);
+    useEffect(() => {
+      if (!setsBySlot) return;
+      // Le set le plus récent
+      const allSetsForDay = Object.values(setsBySlot).flat();
+      if (allSetsForDay.length === 0) return; // session pas démarrée
+
+      const latest = allSetsForDay.reduce((m, s) =>
+        (new Date(s.completedAt) > new Date(m.completedAt)) ? s : m,
+        allSetsForDay[0]);
+      if (!latest?.completedAt) return;
+
+      const checkIdle = () => {
+        const ms = Date.now() - new Date(latest.completedAt).getTime();
+        if (ms > SIRENS_IDLE_MS && ms < 4 * SIRENS_IDLE_MS) {
+          setShow(true);
+        }
+      };
+
+      // Check au focus / visibilitychange (l'utilisateur revient sur l'app)
+      const onVis = () => { if (!document.hidden) checkIdle(); };
+      document.addEventListener('visibilitychange', onVis);
+      window.addEventListener('focus', onVis);
+      // Check une fois immédiatement
+      checkIdle();
+      return () => {
+        document.removeEventListener('visibilitychange', onVis);
+        window.removeEventListener('focus', onVis);
+      };
+    }, [setsBySlot, sessionDay]);
+    return [show, () => setShow(false)];
+  };
+
+  const SirensWarning = ({ onDismiss }) => (
+    <div style={{
+      marginTop: 10,
+      padding: '14px 16px',
+      background: 'rgba(185,144,224,0.08)',
+      border: '1px solid rgba(185,144,224,0.3)',
+      borderRadius: 12,
+      animation: 'fade-in-up 600ms var(--ease-out)',
+    }}>
+      <div className="greek" style={{
+        fontSize: 14,
+        color: 'var(--accent-royal)',
+        fontStyle: 'italic',
+        textAlign: 'center',
+        marginBottom: 10,
+        lineHeight: 1.4,
+      }}>
+        Les Sirènes t'appellent. Reviens au mât.
+      </div>
+      <button type="button" onClick={onDismiss}
+        style={{
+          width: '100%',
+          background: 'transparent',
+          border: '1px solid var(--accent-royal)',
+          borderRadius: 8,
+          color: 'var(--accent-royal)',
+          padding: '8px 12px',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '1.2px',
+          textTransform: 'uppercase',
+          cursor: 'pointer',
+        }}>
+        Je reprends
+      </button>
+    </div>
+  );
 
   /* ==========================================================
      Récompenses tangibles (SPEC §11 Étape 12)
