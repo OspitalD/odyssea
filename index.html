@@ -198,8 +198,96 @@
     { min: 100, name: 'Olympien',  token: 'var(--rank-olympien)' },
   ];
 
+  // BADGES (SPEC §7.3) — catalogue des achievements.
+  // Chaque badge a un check() async qui peut lire ctx (passé par checkBadges).
+  // Trigger : appelés après TERMINER (session_complete) ou VALIDER SET (set_validated).
+  // Atlas/Achille requièrent un bodyweight stocké en prefs (saisi dans /reglages).
+  const BADGES = [
+    {
+      id: 'first_step',
+      name: 'Premier Pas',
+      description: '1ère session complétée',
+      glyph: 'Α',
+      check: async () => {
+        const sessions = await db.sessions.toArray();
+        return sessions.some(s => s.completedAt);
+      },
+    },
+    {
+      id: 'atlas',
+      name: 'Atlas',
+      description: 'Squat 2× BW soulevé',
+      glyph: 'Β',
+      check: async (ctx) => {
+        if (!ctx.bodyweight) return false;
+        const sets = await db.sets.toArray();
+        return sets.some(s => /squat/i.test(s.exerciseName || '') && s.weight >= 2 * ctx.bodyweight);
+      },
+    },
+    {
+      id: 'achille',
+      name: 'Achille',
+      description: 'Bench 1× BW soulevé',
+      glyph: 'Γ',
+      check: async (ctx) => {
+        if (!ctx.bodyweight) return false;
+        const sets = await db.sets.toArray();
+        return sets.some(s => /bench/i.test(s.exerciseName || '') && s.weight >= ctx.bodyweight);
+      },
+    },
+    {
+      id: 'sirenes',
+      name: 'Sirènes',
+      description: 'Reprise après break streak',
+      glyph: 'Δ',
+      check: async () => {
+        const s = await getStreak();
+        return s.currentStreak > 0 && s.longestStreak > s.currentStreak;
+      },
+    },
+    {
+      id: 'heracles',
+      name: 'Héraclès',
+      description: '12 sessions consécutives',
+      glyph: 'Ε',
+      check: async () => {
+        const s = await getStreak();
+        return s.currentStreak >= 12;
+      },
+    },
+    {
+      id: 'arc_ulysse',
+      name: "L'Arc d'Ulysse",
+      description: 'Bloc 4 démarré',
+      glyph: 'Ζ',
+      check: async () => {
+        const sessions = await db.sessions.toArray();
+        return sessions.some(s => s.completedAt && s.week >= 17);
+      },
+    },
+    {
+      id: 'penelope',
+      name: 'Pénélope',
+      description: '100 sessions cumulées',
+      glyph: 'Η',
+      check: async () => {
+        const sessions = await db.sessions.toArray();
+        return sessions.filter(s => s.completedAt).length >= 100;
+      },
+    },
+    {
+      id: 'ithaque',
+      name: 'Ithaque',
+      description: 'ATHX complété',
+      glyph: 'Θ',
+      check: async () => {
+        const today = new Date();
+        return today >= new Date(ATHX_DATE + 'T00:00:00');
+      },
+    },
+  ];
+
   // Pool de phrases fin de session (v4 patch §Microcopy variable)
-  // Cablé avec la logique pickEndPhrase() en Vendredi 8 (Niveau 1).
   const SESSION_END_PHRASES = [
     "Endure, mon cœur.",
     "Mètis intacte.",
@@ -499,6 +587,64 @@
   }
 
   /* ==========================================================
+     BADGES — DB helpers + checkBadges + lazy confetti loader
+     ========================================================== */
+  async function unlockedBadgeIds() {
+    const rows = await db.badges.toArray();
+    return new Set(rows.map(r => r.badgeId));
+  }
+
+  async function getBodyweight() {
+    const row = await db.prefs.get('bodyweight');
+    return row?.value || null;
+  }
+
+  // Vérifie tous les badges non encore unlock. Renvoie les nouveaux.
+  // À appeler après les events qui peuvent déclencher : session_complete, set_validated.
+  async function checkBadges() {
+    const unlocked = await unlockedBadgeIds();
+    const ctx = { bodyweight: await getBodyweight() };
+    const newly = [];
+    for (const badge of BADGES) {
+      if (unlocked.has(badge.id)) continue;
+      try {
+        if (await badge.check(ctx)) {
+          await db.badges.add({ badgeId: badge.id, unlockedAt: new Date().toISOString() });
+          newly.push(badge);
+        }
+      } catch {}
+    }
+    return newly;
+  }
+
+  // Confetti — lazy load CDN au 1er trigger pour ne pas alourdir le boot.
+  let _confettiPromise = null;
+  function loadConfetti() {
+    if (_confettiPromise) return _confettiPromise;
+    _confettiPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js';
+      s.onload = () => resolve(window.confetti);
+      s.onerror = () => { _confettiPromise = null; reject(new Error('confetti load failed')); };
+      document.head.appendChild(s);
+    });
+    return _confettiPromise;
+  }
+
+  async function fireConfetti() {
+    try {
+      const confetti = await loadConfetti();
+      confetti({
+        particleCount: 70,
+        spread: 75,
+        origin: { y: 0.6 },
+        colors: ['#E8A020', '#3ECFA0', '#F5F5F3', '#B990E0'],
+        ticks: 200,
+      });
+    } catch {}
+  }
+
+  /* ==========================================================
      END PHRASE (SPEC v5 §7.1 + v4 patch)
      Pioche aléatoire dans SESSION_END_PHRASES, jamais 2× d'affilée.
      ========================================================== */
@@ -520,6 +666,57 @@
       return () => { alive = false; };
     }, [refreshKey]);
     return streak;
+  };
+
+  // Hook : meilleur set (par e1RM) de la semaine précédente pour un exo
+  // donné. Sert au bandeau "Sem -1" sur ExoCard. Renvoie {none:true} si rien.
+  const useLastWeekBest = (exerciseName, currentWeek) => {
+    const [state, setState] = useState(null);
+    useEffect(() => {
+      if (currentWeek <= 1 || !exerciseName) { setState({ none: true }); return; }
+      let alive = true;
+      db.sets.where('week').equals(currentWeek - 1).toArray().then(rows => {
+        if (!alive) return;
+        const matches = rows.filter(s => s.exerciseName === exerciseName && s.e1RM);
+        if (!matches.length) { setState({ none: true }); return; }
+        setState(matches.reduce((m, s) => (s.e1RM > m.e1RM ? s : m), matches[0]));
+      });
+      return () => { alive = false; };
+    }, [exerciseName, currentWeek]);
+    return state;
+  };
+
+  // Hook : tous les badges unlocked (pour /stats).
+  const useUnlockedBadges = (refreshKey = 0) => {
+    const [unlocked, setUnlocked] = useState(null);
+    useEffect(() => {
+      let alive = true;
+      db.badges.toArray().then(rows => {
+        if (!alive) return;
+        const map = {};
+        for (const r of rows) map[r.badgeId] = r;
+        setUnlocked(map);
+      });
+      return () => { alive = false; };
+    }, [refreshKey]);
+    return unlocked;
+  };
+
+  // Hook : tous les sets PR (sets.isPR === true), triés chronologiquement.
+  // Pour le Wall of PRs sur /stats.
+  const useAllPRs = (refreshKey = 0) => {
+    const [prs, setPRs] = useState(null);
+    useEffect(() => {
+      let alive = true;
+      db.sets.toArray().then(rows => {
+        if (!alive) return;
+        const filtered = rows.filter(s => s.isPR && s.completedAt);
+        filtered.sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+        setPRs(filtered);
+      });
+      return () => { alive = false; };
+    }, [refreshKey]);
+    return prs;
   };
 
   // Hook : best e1RM historique pour un exo donné (sert d'e1RM_known).
@@ -951,6 +1148,64 @@
   );
 
   /* ==========================================================
+     BadgeIcon + BadgeToast + BadgeCard
+     ========================================================== */
+  // Cercle avec lettre grecque, état locked/unlocked.
+  const BadgeIcon = ({ badge, unlocked, size = 48 }) => (
+    <div style={{
+      width: size, height: size,
+      borderRadius: '50%',
+      background: unlocked ? 'rgba(232,160,32,0.12)' : 'var(--bg-primary)',
+      border: `1.5px solid ${unlocked ? 'var(--accent-olympus)' : 'var(--border-strong)'}`,
+      display: 'grid',
+      placeItems: 'center',
+      fontFamily: 'var(--font-greek)',
+      fontStyle: 'italic',
+      fontSize: size * 0.5,
+      fontWeight: 400,
+      color: unlocked ? 'var(--accent-olympus)' : 'var(--text-tertiary)',
+      flex: '0 0 auto',
+    }}>{unlocked ? badge.glyph : '?'}</div>
+  );
+
+  // Toast en bas de l'écran : "Badge débloqué : {name}". Fade-out après ~3.5s.
+  const BadgeToast = ({ badge, onDone }) => {
+    useEffect(() => {
+      const t = setTimeout(onDone, 3500);
+      return () => clearTimeout(t);
+    }, [badge.id]);
+    return (
+      <div style={{
+        position: 'fixed',
+        left: '50%',
+        bottom: 'calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + 16px)',
+        transform: 'translateX(-50%)',
+        zIndex: 180,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '12px 18px 12px 12px',
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--accent-olympus)',
+        borderRadius: 14,
+        boxShadow: '0 6px 24px rgba(0,0,0,0.35)',
+        animation: 'fade-in-up 400ms var(--ease-out)',
+        maxWidth: 'calc(var(--max-app-width) - 32px)',
+      }}>
+        <BadgeIcon badge={badge} unlocked={true} size={40} />
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--accent-olympus)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+            Badge débloqué
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-primary)', marginTop: 2 }}>
+            {badge.name}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /* ==========================================================
      SessionEndOverlay — phrase mythologique fade-in 300ms,
      reste 2s puis transition vers /semaine.
      ========================================================== */
@@ -1017,7 +1272,7 @@
      - /reglages   → Ven : ATHX date, sons, reset, export
      ========================================================== */
   // ExoCard : 1 carte par exo, accordéon, saisie set complète.
-  const ExoCard = ({ ex, week, sessionDay, sets, isOpen, onToggle, onSetValidated }) => {
+  const ExoCard = ({ ex, week, sessionDay, sets, isOpen, onToggle, onSetValidated, onBadgesUnlocked }) => {
     const lastSet = sets && sets.length ? sets[sets.length - 1] : null;
     // Pré-remplit weight/reps avec les valeurs du dernier set, ou défauts.
     const [weight, setWeight] = useState(() => lastSet?.weight ?? 0);
@@ -1034,6 +1289,7 @@
     }, [lastSet?.id]);
 
     const historicalBest = useBestE1RMFor(ex.exerciseName, sets?.length || 0);
+    const lastWeekBest = useLastWeekBest(ex.exerciseName, week);
     const previewE1RM = weight > 0 && reps > 0 ? round05(epley(weight, reps)) : 0;
     const previewSI = weight > 0 && reps > 0 ? stressIndex(weight, reps, rir, historicalBest || previewE1RM) : 0;
     const sessionVL = volumeLoad(sets || []);
@@ -1067,6 +1323,10 @@
       // Haptic Android (no-op silencieux sur iOS — la Web Vibration API n'y
       // est pas implémentée par Apple).
       try { navigator.vibrate && navigator.vibrate(isPR ? [30, 50, 60] : 20); } catch {}
+      // Confetti sur PR — lazy load la lib la 1ère fois.
+      if (isPR) fireConfetti();
+      // Check badges set-based (Atlas / Achille déclenchables ici)
+      checkBadges().then(newly => { if (newly.length) onBadgesUnlocked(newly); });
       // Flash 250ms — feedback visuel garanti sur toute plateforme.
       setFlash(true);
       setTimeout(() => setFlash(false), 250);
@@ -1119,6 +1379,30 @@
                 padding: '10px 12px',
                 marginBottom: 12,
               }}>{ex.prescription}</div>
+            )}
+
+            {/* Bandeau Sem -1 — apparaît dès la S2 si historique dispo */}
+            {lastWeekBest && !lastWeekBest.none && (
+              <div style={{
+                fontSize: 12,
+                color: 'var(--text-secondary)',
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-subtle)',
+                borderLeft: '3px solid var(--accent-royal)',
+                borderRadius: 10,
+                padding: '8px 12px',
+                marginBottom: 12,
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 8,
+              }}>
+                <span style={{ color: 'var(--accent-royal)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '1.2px', fontWeight: 700 }}>Sem −1</span>
+                <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{lastWeekBest.weight} kg</span>
+                <span>×{lastWeekBest.reps}</span>
+                <span style={{ fontSize: 11 }}>RIR {lastWeekBest.rir}</span>
+                <span style={{ flex: 1 }} />
+                <span style={{ color: 'var(--accent-laurel)', fontSize: 11, fontWeight: 700 }}>e1RM {lastWeekBest.e1RM}</span>
+              </div>
             )}
 
             {/* Bandeau live e1RM + Volume Load (mis à jour à chaque set validé) */}
@@ -1267,6 +1551,10 @@
 
     const [endPhrase, setEndPhrase] = useState(null);
     const [terminating, setTerminating] = useState(false);
+    const [recentBadges, setRecentBadges] = useState([]); // queue de badges fraîchement débloqués
+    const onBadgesUnlocked = useCallback((newly) => {
+      if (newly && newly.length) setRecentBadges(b => [...b, ...newly]);
+    }, []);
 
     // Activation TERMINER : ≥1 set validé sur CHAQUE exo.
     const canTerminate = exos && exos.length > 0 && setsBySlot &&
@@ -1292,6 +1580,11 @@
       // Bump streak (1× par jour max — multiples sessions le même jour ne cumulent pas)
       try { await bumpStreak(); } catch {}
       setStreakTick(t => t + 1);
+      // Check badges après bumpStreak (Premier Pas, Sirènes, Héraclès…)
+      try {
+        const newly = await checkBadges();
+        if (newly.length) setRecentBadges(b => [...b, ...newly]);
+      } catch {}
       // Pioche phrase et l'affiche
       const phrase = await pickEndPhrase();
       setEndPhrase(phrase);
@@ -1340,6 +1633,7 @@
                   isOpen={openSlot === ex.exerciseSlot}
                   onToggle={() => setOpenSlot(openSlot === ex.exerciseSlot ? null : ex.exerciseSlot)}
                   onSetValidated={refreshSets}
+                  onBadgesUnlocked={onBadgesUnlocked}
                 />
               ))}
 
@@ -1384,6 +1678,12 @@
           )}
         </PageWrap>
         {endPhrase && <SessionEndOverlay phrase={endPhrase} />}
+        {recentBadges.length > 0 && (
+          <BadgeToast
+            badge={recentBadges[0]}
+            onDone={() => setRecentBadges(b => b.slice(1))}
+          />
+        )}
       </>
     );
   };
@@ -1477,19 +1777,139 @@
     );
   };
 
-  const StatsPage = () => (
-    <PageWrap title="Stats" subtitle="e1RM par exercice · standards ATHX">
-      <Card>
-        <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
-          Niveau 0 — e1RM tracking
+  const StatsPage = () => {
+    const [refresh, setRefresh] = useState(0);
+    const unlocked = useUnlockedBadges(refresh);
+    const prs = useAllPRs(refresh);
+
+    // Reload à chaque visite (au cas où on vient de unlocker un badge)
+    useEffect(() => { setRefresh(r => r + 1); }, []);
+
+    return (
+      <PageWrap title="Stats" subtitle="Badges débloqués · Wall of PRs">
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
+            Achievements
+          </div>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(2, 1fr)',
+            gap: 10,
+          }}>
+            {BADGES.map(badge => {
+              const isUnlocked = unlocked && !!unlocked[badge.id];
+              return (
+                <div
+                  key={badge.id}
+                  style={{
+                    background: 'var(--bg-surface)',
+                    border: `1px solid ${isUnlocked ? 'rgba(232,160,32,0.4)' : 'var(--border-subtle)'}`,
+                    borderRadius: 14,
+                    padding: 12,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 8,
+                    textAlign: 'center',
+                    opacity: isUnlocked ? 1 : 0.55,
+                    transition: 'opacity var(--dur-normal) var(--ease-out)',
+                  }}
+                >
+                  <BadgeIcon badge={badge} unlocked={isUnlocked} size={48} />
+                  <div style={{
+                    fontSize: 13,
+                    fontWeight: 800,
+                    color: isUnlocked ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  }}>
+                    {badge.name}
+                  </div>
+                  <div style={{
+                    fontSize: 11,
+                    color: 'var(--text-tertiary)',
+                    lineHeight: 1.3,
+                  }}>
+                    {isUnlocked ? badge.description : '?'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
-        Liste des 6 lifts principaux + delta vs début bloc — implémentation Ven 8 mai.
-      </Card>
-    </PageWrap>
-  );
+
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
+            Wall of PRs
+          </div>
+          {prs === null ? (
+            <Card><div style={{ color: 'var(--text-secondary)' }}>Chargement…</div></Card>
+          ) : prs.length === 0 ? (
+            <Card>
+              <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+                Aucun PR pour l'instant. Bats un e1RM pour voir le mur s'allumer.
+              </div>
+            </Card>
+          ) : (
+            <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {prs.map(pr => (
+                <li key={pr.id} style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '10px 14px',
+                  background: 'rgba(232,160,32,0.06)',
+                  border: '1px solid rgba(232,160,32,0.3)',
+                  borderRadius: 12,
+                }}>
+                  <span style={{
+                    color: 'var(--accent-olympus)',
+                    fontSize: 16,
+                    fontWeight: 800,
+                  }}>★</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                      {pr.exerciseName}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                      Sem {pr.week} · {pr.weight} kg × {pr.reps} RIR {pr.rir}
+                    </div>
+                  </div>
+                  <div style={{
+                    fontSize: 14,
+                    fontWeight: 800,
+                    color: 'var(--accent-olympus)',
+                  }}>
+                    {pr.e1RM}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </PageWrap>
+    );
+  };
 
   const ReglagesPage = () => {
     const [pingState, setPingState] = useState({ status: 'idle', msg: '' });
+    const [bodyweight, setBodyweight] = useState('');
+    const [bwSaved, setBwSaved] = useState(false);
+
+    useEffect(() => {
+      db.prefs.get('bodyweight').then(row => {
+        if (row?.value) setBodyweight(String(row.value));
+      });
+    }, []);
+
+    const saveBodyweight = async () => {
+      const v = parseFloat(bodyweight);
+      if (!Number.isFinite(v) || v <= 0) return;
+      await db.prefs.put({ key: 'bodyweight', value: v });
+      setBwSaved(true);
+      setTimeout(() => setBwSaved(false), 1500);
+      // Revalide les badges set-based qui dépendent du BW
+      checkBadges().catch(() => {});
+    };
+
     const ping = async () => {
       setPingState({ status: 'loading', msg: 'Test en cours…' });
       try {
@@ -1535,6 +1955,51 @@
           {pingState.status !== 'idle' && (
             <div style={{ marginTop: 10, fontSize: 13, color: pingColor }}>{pingState.msg}</div>
           )}
+        </Card>
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+            Bodyweight (kg)
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 8 }}>
+            Pour les badges Atlas (squat 2× BW) et Achille (bench 1× BW).
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.1"
+              value={bodyweight}
+              onChange={e => setBodyweight(e.target.value)}
+              placeholder="ex: 78"
+              style={{
+                flex: 1,
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-strong)',
+                borderRadius: 10,
+                color: 'var(--text-primary)',
+                padding: '10px 12px',
+                fontSize: 14,
+                outline: 'none',
+              }}
+            />
+            <button
+              type="button"
+              onClick={saveBodyweight}
+              style={{
+                background: bwSaved ? 'var(--accent-laurel)' : 'transparent',
+                border: '1px solid var(--border-strong)',
+                borderRadius: 10,
+                color: bwSaved ? '#0D0F0E' : 'var(--text-primary)',
+                padding: '8px 18px',
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: '0.4px',
+                textTransform: 'uppercase',
+                cursor: 'pointer',
+                transition: 'all var(--dur-fast) var(--ease-out)',
+              }}
+            >{bwSaved ? '✓' : 'OK'}</button>
+          </div>
         </Card>
         <Card style={{ marginTop: 12 }}>
           <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
