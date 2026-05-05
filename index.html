@@ -178,6 +178,7 @@
     AUJOURDHUI: '/aujourdhui',
     SEMAINE:    '/semaine',
     HEROS:      '/heros',
+    CARTE:      '/carte',
     STATS:      '/stats',     // legacy — redirige vers /heros (gardé pour bookmarks)
     REGLAGES:   '/reglages',
   };
@@ -1148,6 +1149,8 @@
     { id: 'today',    to: ROUTES.AUJOURDHUI, label: "Aujourd'hui", icon: Icons.dumbbell, activeColor: 'var(--accent-laurel)'  },
     { id: 'week',     to: ROUTES.SEMAINE,    label: 'Semaine',     icon: Icons.calendar, activeColor: 'var(--accent-royal)'   },
     { id: 'heros',    to: ROUTES.HEROS,      label: 'Héros',       icon: Icons.column,   activeColor: 'var(--accent-olympus)' },
+    // /carte accessible via <Link> dans /aujourdhui ou directement à l'URL.
+    // Pas dans la bottom nav pour ne pas saturer (limite à 4 items).
     { id: 'settings', to: ROUTES.REGLAGES,   label: 'Réglages',    icon: Icons.settings, activeColor: 'var(--accent-olympus)' },
   ];
 
@@ -2233,8 +2236,12 @@
       // Haptic Android (no-op silencieux sur iOS — la Web Vibration API n'y
       // est pas implémentée par Apple).
       try { navigator.vibrate && navigator.vibrate(isPR ? [30, 50, 60] : 20); } catch {}
-      // Confetti sur PR — lazy load la lib la 1ère fois.
-      if (isPR) fireConfetti();
+      // PR e1RM (escalade Étape 10) : confetti + son lyre + toast (toast déjà
+      // câblé via la liste des sets et le flag isPR).
+      if (isPR) {
+        fireConfetti();
+        play(soundLyre);
+      }
       // Check badges set-based (Atlas / Achille déclenchables ici)
       checkBadges().then(newly => { if (newly.length) onBadgesUnlocked(newly); });
       // Flash 250ms — feedback visuel garanti sur toute plateforme.
@@ -2490,6 +2497,7 @@
     const onBadgesUnlocked = useCallback((newly) => {
       if (newly && newly.length) setRecentBadges(b => [...b, ...newly]);
     }, []);
+    const [completedBlock, setCompletedBlock] = useState(null);
 
     // Mode Hyperfocus (SPEC §11) — fond plus dark, nav cachée, only current exo
     const [hyperfocus, setHyperfocus] = useState(false);
@@ -2534,6 +2542,11 @@
         const newly = await checkBadges();
         if (newly.length) setRecentBadges(b => [...b, ...newly]);
       } catch {}
+      // Check transition de bloc (cycliquement : on a complété le bloc précédent)
+      try {
+        const finishedBlock = await checkBlockTransition(week);
+        if (finishedBlock) setCompletedBlock(finishedBlock);
+      } catch {}
       // Pioche phrase et l'affiche
       const phrase = await pickEndPhrase();
       setEndPhrase(phrase);
@@ -2568,6 +2581,25 @@
             <AthxCountdown />
             {streak && <StreakBadge streak={streak} />}
           </div>
+          {/* Lien discret vers la carte du voyage */}
+          <button type="button" onClick={() => navigate(ROUTES.CARTE)}
+            style={{
+              marginTop: 10,
+              width: '100%',
+              background: 'transparent',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 10,
+              color: 'var(--text-secondary)',
+              padding: '8px 12px',
+              fontSize: 11,
+              letterSpacing: '1.2px',
+              textTransform: 'uppercase',
+              fontWeight: 700,
+              cursor: 'pointer',
+              transition: 'border-color var(--dur-fast) var(--ease-out)',
+            }}>
+            ⟶ Voir la carte du voyage
+          </button>
           <LotophagesWarning streak={streak} onPardonUsed={() => setStreakTick(t => t + 1)} />
           {!day.strength ? (
             <Card style={{ marginTop: 12 }}>
@@ -2675,6 +2707,12 @@
             onDone={() => setRecentBadges(b => b.slice(1))}
           />
         )}
+        {completedBlock && (
+          <BlockCompleteModal
+            block={completedBlock}
+            onClose={() => { setCompletedBlock(null); play(soundBell); }}
+          />
+        )}
       </>
     );
   };
@@ -2767,6 +2805,226 @@
       </PageWrap>
     );
   };
+
+  /* ==========================================================
+     Carte du Voyage (SPEC §11 Étape 10) — SVG parchemin stylisé
+     Troie → Lotophages → Cyclope → Circé → Ithaque, avec dot avatar
+     positionné selon la semaine courante.
+     ========================================================== */
+  const CartePage = () => {
+    const week = getCurrentWeek();
+    const block = getCurrentBlock(week);
+
+    // 4 stations, espacées proportionnellement (week 1 = Troie, week 20 = Ithaque)
+    // Chaque station = nœud sur un parcours méandrique.
+    const stations = [
+      { id: 'troie',      label: 'Troie',          x:  10, y: 84, weekStart: 0  },
+      { id: 'lotophages', label: 'Les Lotophages', x:  30, y: 30, weekStart: 1  },
+      { id: 'cyclope',    label: 'Le Cyclope',     x:  55, y: 78, weekStart: 7  },
+      { id: 'circe',      label: 'Circé',          x:  78, y: 32, weekStart: 13 },
+      { id: 'ithaque',    label: 'Ithaque',        x:  92, y: 60, weekStart: 17 },
+    ];
+
+    // Position de l'avatar sur le parcours en fonction de la semaine.
+    const avatarPos = (() => {
+      if (week >= 17) {
+        const ratio = Math.min(1, (week - 17) / 4);
+        return interp(stations[3], stations[4], ratio);
+      }
+      if (week >= 13) {
+        return interp(stations[2], stations[3], (week - 13) / 4);
+      }
+      if (week >= 7) {
+        return interp(stations[1], stations[2], (week - 7) / 6);
+      }
+      if (week >= 1) {
+        return interp(stations[0], stations[1], (week - 1) / 6);
+      }
+      return stations[0];
+    })();
+
+    const blockColor = ['var(--text-secondary)', 'var(--accent-laurel)', 'var(--accent-blood)', 'var(--accent-royal)', 'var(--accent-olympus)'][block.id] || 'var(--text-secondary)';
+
+    return (
+      <PageWrap title="Carte du Voyage" subtitle={`Bloc ${block.id} · ${block.name} · Sem ${week}/20`}>
+        <div style={{
+          background: 'rgba(232, 200, 140, 0.04)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 14,
+          padding: 16,
+          position: 'relative',
+        }}>
+          <svg viewBox="0 0 100 110" style={{ width: '100%', height: 'auto', display: 'block' }} aria-label="Carte du Voyage Troie → Ithaque">
+            {/* Parchemin texture (juste un rect rounded légèrement teinté) */}
+            <defs>
+              <pattern id="parchment" width="3" height="3" patternUnits="userSpaceOnUse">
+                <rect width="3" height="3" fill="rgba(232, 200, 140, 0.02)" />
+                <circle cx="0.5" cy="0.5" r="0.15" fill="rgba(232, 200, 140, 0.05)" />
+              </pattern>
+            </defs>
+            <rect x="2" y="2" width="96" height="106" rx="3" fill="url(#parchment)" />
+
+            {/* Parcours méandrique connectant les stations */}
+            <path d="M 10 84 Q 18 60, 30 30 Q 42 0, 55 78 Q 68 100, 78 32 Q 86 6, 92 60"
+                  fill="none"
+                  stroke="var(--accent-olympus)"
+                  strokeWidth="0.5"
+                  strokeDasharray="2 1"
+                  opacity="0.5" />
+
+            {/* Stations */}
+            {stations.map(s => {
+              const isCurrent = s.id === ['troie','lotophages','cyclope','circe','ithaque'][block.id];
+              const isPast = week >= (stations[stations.findIndex(x => x.id === s.id) + 1]?.weekStart ?? 999);
+              return (
+                <g key={s.id}>
+                  <circle cx={s.x} cy={s.y} r={isCurrent ? 2.4 : 1.6}
+                          fill={isPast ? 'var(--accent-laurel)' : isCurrent ? 'var(--accent-olympus)' : 'var(--bg-surface)'}
+                          stroke={isCurrent ? 'var(--accent-olympus)' : 'var(--text-tertiary)'}
+                          strokeWidth="0.6" />
+                  <text x={s.x} y={s.y + 6}
+                        textAnchor="middle"
+                        fontSize="3.5"
+                        fontFamily="EB Garamond, serif"
+                        fontStyle="italic"
+                        fill={isCurrent ? 'var(--accent-olympus)' : isPast ? 'var(--accent-laurel)' : 'var(--text-secondary)'}>
+                    {s.label}
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Avatar dot — Ω miniature sur le parcours */}
+            <g transform={`translate(${avatarPos.x}, ${avatarPos.y - 0.4})`}>
+              <circle r="3.5" fill="var(--bg-primary)" stroke={blockColor} strokeWidth="0.8">
+                <animate attributeName="r" values="3.5;4;3.5" dur="2.4s" repeatCount="indefinite" />
+              </circle>
+              <text textAnchor="middle"
+                    dominantBaseline="middle"
+                    fontSize="3.5"
+                    fontFamily="EB Garamond, serif"
+                    fontStyle="italic"
+                    fill={blockColor}
+                    fontWeight="bold">Ω</text>
+            </g>
+          </svg>
+          <div style={{
+            marginTop: 12,
+            textAlign: 'center',
+            fontSize: 11,
+            color: 'var(--text-tertiary)',
+            textTransform: 'uppercase',
+            letterSpacing: '1.5px',
+            fontWeight: 700,
+          }}>
+            {block.name} · {week >= 17 ? 'Retour à Ithaque' : 'En route'}
+          </div>
+        </div>
+
+        <Card style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+            Étape narrative
+          </div>
+          <div className="greek" style={{ fontSize: 14, fontStyle: 'italic', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+            {NARRATIVE_BY_BLOCK[block.id] || ''}
+          </div>
+        </Card>
+      </PageWrap>
+    );
+  };
+
+  // Helper interp (linéaire entre 2 stations 2D).
+  function interp(a, b, t) {
+    return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+  }
+
+  // Texte narratif par bloc — affiché sur /carte
+  const NARRATIVE_BY_BLOCK = {
+    1: "Tu quittes Troie. Les Lotophages t'appellent à oublier ton but. Résiste — la patience est ton arme.",
+    2: "Le Cyclope se dresse. Force frontale, pas de mêtis ne suffit ici. Frappe juste, sois précis.",
+    3: "Circé transforme ce que tu es. Accepte la métamorphose, le pic est ton vrai visage.",
+    4: "Ithaque approche. L'arc t'attend. Tout ce que tu as enduré, c'était pour cet instant.",
+  };
+
+  /* ==========================================================
+     Mini-célébrations différenciées (SPEC §11 Étape 10)
+     Hiérarchie stricte d'animations selon importance.
+     - Set validé : haptic + flash (déjà fait Étape 3)
+     - PR e1RM : confetti + son lyre + toast (déjà fait Étape 5, on ajoute son ici)
+     - Bloc complété : modal célébration (BlockCompleteModal ci-dessous)
+     - Programme complété : full-screen takeover (ProgrammeCompleteModal)
+     ========================================================== */
+  const BlockCompleteModal = ({ block, onClose }) => (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 220,
+      background: 'rgba(8,10,9,0.95)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: 32,
+      animation: 'fade-in 600ms var(--ease-out)',
+    }}
+    onClick={onClose}>
+      <div style={{
+        background: 'var(--bg-surface)',
+        border: '1.5px solid var(--accent-olympus)',
+        borderRadius: 18,
+        padding: '32px 24px',
+        textAlign: 'center',
+        maxWidth: 360,
+      }}>
+        {/* Étoile Vergina (16 branches simplifiées en 8 rays) */}
+        <svg width="80" height="80" viewBox="-50 -50 100 100" style={{ margin: '0 auto 16px', display: 'block' }}>
+          {[0, 45, 90, 135, 180, 225, 270, 315].map(a => (
+            <polygon key={a}
+              points="0,-40 4,-8 0,0 -4,-8"
+              fill="var(--accent-olympus)"
+              transform={`rotate(${a})`} />
+          ))}
+          <circle cx="0" cy="0" r="6" fill="var(--accent-olympus)" />
+        </svg>
+        <div style={{
+          fontSize: 11,
+          color: 'var(--accent-olympus)',
+          textTransform: 'uppercase',
+          letterSpacing: '2px',
+          fontWeight: 800,
+          marginBottom: 6,
+        }}>Bloc complété</div>
+        <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 12 }}>
+          {block.name}
+        </div>
+        <div className="greek" style={{ fontSize: 15, fontStyle: 'italic', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 20 }}>
+          {NARRATIVE_BY_BLOCK[block.id]}
+        </div>
+        <button type="button" onClick={onClose}
+          style={{
+            background: 'var(--accent-olympus)',
+            border: 'none',
+            borderRadius: 10,
+            color: '#0D0F0E',
+            padding: '12px 24px',
+            fontSize: 12,
+            fontWeight: 800,
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            cursor: 'pointer',
+          }}>Continuer</button>
+      </div>
+    </div>
+  );
+
+  // Détection passage de bloc : check si le précédent block a été franchi
+  // entre 2 sessions. Stocké en prefs.lastSeenBlock.
+  async function checkBlockTransition(currentWeek) {
+    const lastSeenRow = await db.prefs.get('lastSeenBlock');
+    const lastSeen = lastSeenRow?.value || 0;
+    const currentBlock = getCurrentBlock(currentWeek).id;
+    if (currentBlock > lastSeen) {
+      await db.prefs.put({ key: 'lastSeenBlock', value: currentBlock });
+      // Renvoie le bloc précédent (le bloc qu'on vient de COMPLÉTER)
+      if (lastSeen >= 1) return BLOCKS.find(b => b.id === lastSeen);
+    }
+    return null;
+  }
 
   const HerosPage = () => {
     const [refresh, setRefresh] = useState(0);
@@ -3122,6 +3380,7 @@
                 <Route path={ROUTES.AUJOURDHUI} element={<AujourdhuiPage />} />
                 <Route path={ROUTES.SEMAINE}    element={<SemainePage />} />
                 <Route path={ROUTES.HEROS}      element={<HerosPage />} />
+                <Route path={ROUTES.CARTE}      element={<CartePage />} />
                 <Route path={ROUTES.STATS}      element={<HerosPage />} />
                 <Route path={ROUTES.REGLAGES}   element={<ReglagesPage />} />
                 <Route path="*" element={<AujourdhuiPage />} />
