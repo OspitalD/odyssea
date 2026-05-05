@@ -109,6 +109,11 @@
     }
     .app-main--no-nav { padding-bottom: env(safe-area-inset-bottom, 0px); }
 
+    /* Mode Hyperfocus — cache la bottom nav et le header logo */
+    .app-shell.hyperfocus nav[aria-label="Navigation principale"],
+    .app-shell.hyperfocus header { display: none; }
+    .app-shell.hyperfocus .app-main { padding-bottom: env(safe-area-inset-bottom, 0px); }
+
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
         animation-duration: 0.01ms !important;
@@ -1272,12 +1277,185 @@
   };
 
   /* ==========================================================
-     Splash première ouverture — "Le voyage commence."
-     Flag localStorage.odyssea_onboarded. Auto-dismiss au tap.
+     Onboarding 3 écrans (SPEC §11) — remplace l'ancien Splash 1 écran.
+     Flag localStorage.odyssea_onboarded au complete.
      ========================================================== */
   const ONBOARD_KEY = 'odyssea_onboarded';
+  const ONBOARD_LIFTS = [
+    { id: 'squat',    name: 'Back Squat',     step: 5 },
+    { id: 'deadlift', name: 'Deadlift',       step: 5 },
+    { id: 'bench',    name: 'Bench Press',    step: 2.5 },
+    { id: 'ohp',      name: 'OHP',            step: 2.5 },
+    { id: 'row',      name: 'Pendlay Row',    step: 2.5 },
+    { id: 'chin',     name: 'Strict Chin-up', step: 2.5 },
+  ];
 
-  const Splash = ({ onDismiss }) => (
+  const Onboarding = ({ onComplete }) => {
+    const [screen, setScreen] = useState(1);
+    const [name, setName] = useState('');
+    const [oneRMs, setOneRMs] = useState({}); // { lifId: weight }
+
+    const finish = async () => {
+      try {
+        if (name.trim()) await db.prefs.put({ key: 'heroName', value: name.trim() });
+        for (const [id, w] of Object.entries(oneRMs)) {
+          if (w > 0) {
+            const lift = ONBOARD_LIFTS.find(l => l.id === id);
+            if (lift) {
+              await db.oneRMs.add({
+                exerciseName: lift.name,
+                weight: w, reps: 1,
+                e1RM: w,
+                computedAt: new Date().toISOString(),
+              });
+            }
+          }
+        }
+      } catch {}
+      try { localStorage.setItem(ONBOARD_KEY, '1'); } catch {}
+      onComplete();
+    };
+
+    const Screen = ({ children, ctaLabel = 'Suivant', onCta, ctaDisabled = false, skipLabel, onSkip }) => (
+      <div style={{
+        position: 'fixed', inset: 0,
+        zIndex: 200,
+        background: 'var(--bg-primary)',
+        display: 'flex', flexDirection: 'column',
+        padding: '40px 24px 32px',
+        animation: 'fade-in var(--dur-normal) var(--ease-out)',
+        overflowY: 'auto',
+      }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', maxWidth: 'var(--max-app-width)', width: '100%', margin: '0 auto' }}>
+          {children}
+        </div>
+        <div style={{ display: 'flex', gap: 10, maxWidth: 'var(--max-app-width)', width: '100%', margin: '0 auto', marginTop: 24 }}>
+          {skipLabel && (
+            <button type="button" onClick={onSkip}
+              style={{
+                background: 'transparent',
+                border: '1px solid var(--border-strong)',
+                borderRadius: 12,
+                color: 'var(--text-secondary)',
+                padding: '14px 18px',
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: '1px',
+                textTransform: 'uppercase',
+                cursor: 'pointer',
+              }}>{skipLabel}</button>
+          )}
+          <button type="button" onClick={onCta} disabled={ctaDisabled}
+            style={{
+              flex: 1,
+              background: ctaDisabled ? 'var(--bg-surface-hover)' : 'var(--accent-olympus)',
+              color: ctaDisabled ? 'var(--text-tertiary)' : '#0D0F0E',
+              border: 'none',
+              borderRadius: 12,
+              padding: '14px 18px',
+              fontSize: 13,
+              fontWeight: 800,
+              letterSpacing: '1.5px',
+              textTransform: 'uppercase',
+              cursor: ctaDisabled ? 'not-allowed' : 'pointer',
+            }}>{ctaLabel}</button>
+        </div>
+      </div>
+    );
+
+    if (screen === 1) {
+      return (
+        <Screen
+          ctaLabel="Suivant"
+          ctaDisabled={!name.trim()}
+          onCta={() => setScreen(2)}
+        >
+          <div className="greek" style={{ fontSize: 80, color: 'var(--accent-olympus)', textAlign: 'center', fontStyle: 'italic', lineHeight: 1, marginBottom: 24 }}>Ω</div>
+          <div className="greek" style={{ fontSize: 24, fontStyle: 'italic', textAlign: 'center', color: 'var(--text-primary)', marginBottom: 32 }}>
+            Saisis ton nom, voyageur.
+          </div>
+          <input
+            type="text"
+            value={name}
+            onChange={e => setName(e.target.value)}
+            placeholder="Ulysse"
+            autoFocus
+            style={{
+              width: '100%',
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 12,
+              color: 'var(--text-primary)',
+              padding: '14px 16px',
+              fontSize: 18,
+              fontWeight: 700,
+              outline: 'none',
+              textAlign: 'center',
+            }}
+          />
+        </Screen>
+      );
+    }
+
+    if (screen === 2) {
+      return (
+        <Screen
+          ctaLabel="Suivant"
+          onCta={() => setScreen(3)}
+          skipLabel="Skip"
+          onSkip={() => setScreen(3)}
+        >
+          <div className="greek" style={{ fontSize: 22, fontStyle: 'italic', textAlign: 'center', color: 'var(--text-primary)', marginBottom: 6 }}>
+            Quels sont tes 1RM actuels ?
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'center', marginBottom: 24 }}>
+            Optionnel — saisis ce que tu connais, skip le reste.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {ONBOARD_LIFTS.map(lift => {
+              const v = oneRMs[lift.id] || 0;
+              return (
+                <div key={lift.id}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{lift.name}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: v > 0 ? 'var(--accent-laurel)' : 'var(--text-tertiary)' }}>
+                      {v > 0 ? `${v} kg` : '—'}
+                    </span>
+                  </div>
+                  <Stepper
+                    value={v}
+                    onChange={(nv) => setOneRMs(s => ({ ...s, [lift.id]: nv }))}
+                    steps={lift.step === 5 ? [-10, -5, +5, +10] : [-5, -2.5, +2.5, +5]}
+                    unit="kg"
+                    fontSize={20}
+                    max={500}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </Screen>
+      );
+    }
+
+    return (
+      <Screen ctaLabel="Commence le voyage" onCta={finish}>
+        <div className="greek" style={{ fontSize: 100, color: 'var(--accent-olympus)', textAlign: 'center', fontStyle: 'italic', lineHeight: 1, marginBottom: 24 }}>Ω</div>
+        <div className="greek" style={{ fontSize: 28, fontStyle: 'italic', textAlign: 'center', color: 'var(--text-primary)', lineHeight: 1.4, marginBottom: 16 }}>
+          Athéna te bénit{name ? `, ${name}` : ''}.
+        </div>
+        <div className="greek" style={{ fontSize: 18, fontStyle: 'italic', textAlign: 'center', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+          Le voyage commence.
+        </div>
+      </Screen>
+    );
+  };
+
+  // Compatibilité : ancien <Splash> renvoie maintenant directement <Onboarding>.
+  const Splash = ({ onDismiss }) => <Onboarding onComplete={onDismiss} />;
+
+  // Legacy fallback (n'est plus utilisé après cet étape).
+  const _LegacySplash = ({ onDismiss }) => (
     <div
       role="button"
       tabIndex={0}
@@ -1614,6 +1792,164 @@
     </div>
   );
 
+  /* ==========================================================
+     Web Audio helpers — sons synthétiques discrets (lyre/cloche/beep).
+     Pas de fichier audio, tout généré au tap.
+     ========================================================== */
+  let _audioCtx = null;
+  function audio() {
+    if (!_audioCtx) {
+      try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+    }
+    return _audioCtx;
+  }
+  function tone(freq, durMs, type = 'sine', vol = 0.08) {
+    const ctx = audio(); if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = freq;
+    osc.type = type;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    const t = ctx.currentTime;
+    gain.gain.setValueAtTime(vol, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + durMs / 1000);
+    osc.start(t);
+    osc.stop(t + durMs / 1000);
+  }
+  // Lyre — pluck triangle 440Hz, durée 200ms
+  function soundLyre()  { tone(440, 200, 'triangle', 0.06); }
+  // Cloche bronze — sine 660Hz, durée 500ms
+  function soundBell()  { tone(660, 500, 'sine', 0.05); }
+  // Beep timer — tick rapide 880Hz, durée 80ms
+  function soundTick()  { tone(880, 80,  'sine', 0.04); }
+
+  // Toggle son global stocké en prefs.soundsEnabled (default true).
+  let _soundsEnabledCache = true;
+  async function loadSoundsPref() {
+    const row = await db.prefs.get('soundsEnabled');
+    _soundsEnabledCache = row?.value !== false;
+    return _soundsEnabledCache;
+  }
+  function isSoundsEnabled() { return _soundsEnabledCache; }
+  async function setSoundsEnabled(v) {
+    _soundsEnabledCache = !!v;
+    await db.prefs.put({ key: 'soundsEnabled', value: !!v });
+  }
+  function play(soundFn) { if (isSoundsEnabled()) soundFn(); }
+
+  /* ==========================================================
+     Timer intégré (SPEC §11) — count-down circulaire pour density
+     sets (14 min Squat/Bench, 10-12 min jumps).
+     Sons discrets aux milestones (5, 10, 13 min).
+     ========================================================== */
+  // Détection density-set / jump via prescription regex
+  function defaultTimerMinutes(prescription = '') {
+    if (/density set/i.test(prescription)) return 14;
+    if (/jump for (\d+)/i.test(prescription)) {
+      const m = prescription.match(/jump for (\d+)/i);
+      return m ? parseInt(m[1], 10) : 10;
+    }
+    return null;
+  }
+
+  const Timer = ({ durationMin, onClose }) => {
+    const totalSec = durationMin * 60;
+    const [elapsed, setElapsed] = useState(0);
+    const [running, setRunning] = useState(true);
+    const milestones = useMemo(() => [5 * 60, 10 * 60, 13 * 60].filter(s => s < totalSec), [totalSec]);
+    const lastTickRef = React.useRef(-1);
+
+    useEffect(() => {
+      if (!running) return;
+      const start = Date.now() - elapsed * 1000;
+      const id = setInterval(() => {
+        const e = Math.min(totalSec, Math.floor((Date.now() - start) / 1000));
+        setElapsed(e);
+        // Sons milestone
+        for (const ms of milestones) {
+          if (e >= ms && lastTickRef.current < ms) {
+            lastTickRef.current = ms;
+            play(soundTick);
+            try { navigator.vibrate && navigator.vibrate(40); } catch {}
+          }
+        }
+        if (e >= totalSec) {
+          clearInterval(id);
+          setRunning(false);
+          play(soundBell);
+          try { navigator.vibrate && navigator.vibrate([60, 40, 80]); } catch {}
+        }
+      }, 250);
+      return () => clearInterval(id);
+    }, [running, totalSec, milestones]);
+
+    const remaining = totalSec - elapsed;
+    const min = Math.floor(remaining / 60);
+    const sec = remaining % 60;
+    const progress = elapsed / totalSec;
+    const size = 200;
+    const r = (size - 16) / 2;
+    const C = 2 * Math.PI * r;
+    const dashOffset = C * (1 - progress);
+
+    return (
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 14,
+        padding: 16,
+        background: 'var(--bg-primary)',
+        border: '1px solid var(--accent-olympus)',
+        borderRadius: 14,
+        marginBottom: 12,
+      }}>
+        <svg width={size} height={size}>
+          <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border-subtle)" strokeWidth="6" />
+          <circle cx={size/2} cy={size/2} r={r} fill="none"
+                  stroke="var(--accent-olympus)" strokeWidth="6" strokeLinecap="round"
+                  strokeDasharray={C} strokeDashoffset={dashOffset}
+                  transform={`rotate(-90 ${size/2} ${size/2})`} />
+          <text x={size/2} y={size/2 - 4} textAnchor="middle" fill="var(--text-primary)" fontSize="40" fontWeight="800">
+            {String(min).padStart(2, '0')}:{String(sec).padStart(2, '0')}
+          </text>
+          <text x={size/2} y={size/2 + 28} textAnchor="middle" fill="var(--text-secondary)" fontSize="11" fontWeight="700" letterSpacing="2">
+            {running ? 'EN COURS' : (remaining === 0 ? 'TERMINÉ' : 'PAUSE')}
+          </text>
+        </svg>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button type="button" onClick={() => setRunning(r => !r)}
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 10,
+              color: 'var(--text-primary)',
+              padding: '10px 18px',
+              fontSize: 12,
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '1px',
+              cursor: 'pointer',
+            }}>{running ? 'Pause' : 'Reprendre'}</button>
+          <button type="button" onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 10,
+              color: 'var(--text-secondary)',
+              padding: '10px 18px',
+              fontSize: 12,
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '1px',
+              cursor: 'pointer',
+            }}>Fermer</button>
+        </div>
+      </div>
+    );
+  };
+
   // RIR toggle : 6 cercles 0..5. Le sélectionné est rempli en --accent-laurel.
   // Convention : 0 = à l'échec, 5 = très facile.
   const RirToggle = ({ value, onChange }) => (
@@ -1671,6 +2007,8 @@
 
     const historicalBest = useBestE1RMFor(ex.exerciseName, sets?.length || 0);
     const lastWeekBest = useLastWeekBest(ex.exerciseName, week);
+    const timerMinutes = defaultTimerMinutes(ex.prescription || '');
+    const [timerOpen, setTimerOpen] = useState(false);
     const previewE1RM = weight > 0 && reps > 0 ? round05(epley(weight, reps)) : 0;
     const previewSI = weight > 0 && reps > 0 ? stressIndex(weight, reps, rir, historicalBest || previewE1RM) : 0;
     const sessionVL = volumeLoad(sets || []);
@@ -1760,6 +2098,30 @@
                 padding: '10px 12px',
                 marginBottom: 12,
               }}>{ex.prescription}</div>
+            )}
+
+            {/* Timer intégré — uniquement si l'exo matche density set / jump */}
+            {timerMinutes !== null && (
+              <div style={{ marginBottom: 12 }}>
+                {!timerOpen ? (
+                  <button type="button" onClick={() => setTimerOpen(true)}
+                    style={{
+                      width: '100%',
+                      background: 'transparent',
+                      border: '1px dashed var(--accent-olympus)',
+                      borderRadius: 10,
+                      color: 'var(--accent-olympus)',
+                      padding: '10px 12px',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      letterSpacing: '1.2px',
+                      textTransform: 'uppercase',
+                      cursor: 'pointer',
+                    }}>⏱ Démarrer timer · {timerMinutes} min</button>
+                ) : (
+                  <Timer durationMin={timerMinutes} onClose={() => setTimerOpen(false)} />
+                )}
+              </div>
             )}
 
             {/* Bandeau Sem -1 — apparaît dès la S2 si historique dispo */}
@@ -1937,6 +2299,17 @@
       if (newly && newly.length) setRecentBadges(b => [...b, ...newly]);
     }, []);
 
+    // Mode Hyperfocus (SPEC §11) — fond plus dark, nav cachée, only current exo
+    const [hyperfocus, setHyperfocus] = useState(false);
+    useEffect(() => {
+      // Toggle CSS class sur app-shell pour cacher la bottom nav.
+      const shell = document.querySelector('.app-shell');
+      if (!shell) return;
+      if (hyperfocus) shell.classList.add('hyperfocus');
+      else shell.classList.remove('hyperfocus');
+      return () => shell.classList.remove('hyperfocus');
+    }, [hyperfocus]);
+
     // Activation TERMINER : ≥1 set validé sur CHAQUE exo.
     const canTerminate = exos && exos.length > 0 && setsBySlot &&
       exos.every(ex => (setsBySlot[ex.exerciseSlot] || []).length > 0);
@@ -2004,14 +2377,36 @@
             </Card>
           ) : (
             <>
-              {exos.map(ex => (
+              {/* Toggle Mode Hyperfocus */}
+              <button type="button" onClick={() => setHyperfocus(h => !h)}
+                style={{
+                  marginTop: 10,
+                  width: '100%',
+                  background: hyperfocus ? 'var(--accent-royal)' : 'transparent',
+                  border: `1px solid ${hyperfocus ? 'var(--accent-royal)' : 'var(--border-strong)'}`,
+                  borderRadius: 10,
+                  color: hyperfocus ? '#0D0F0E' : 'var(--text-secondary)',
+                  padding: '8px 0',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: '1.5px',
+                  textTransform: 'uppercase',
+                  cursor: 'pointer',
+                  transition: 'all var(--dur-fast) var(--ease-out)',
+                }}>
+                {hyperfocus ? '◉ Sortir Hyperfocus' : '◎ Hyperfocus'}
+              </button>
+
+              {exos
+                .filter(ex => !hyperfocus || ex.exerciseSlot === openSlot)
+                .map(ex => (
                 <ExoCard
                   key={ex.id}
                   ex={ex}
                   week={week}
                   sessionDay={day.sessionDay}
                   sets={setsBySlot ? (setsBySlot[ex.exerciseSlot] || []) : null}
-                  isOpen={openSlot === ex.exerciseSlot}
+                  isOpen={hyperfocus ? true : (openSlot === ex.exerciseSlot)}
                   onToggle={() => setOpenSlot(openSlot === ex.exerciseSlot ? null : ex.exerciseSlot)}
                   onSetValidated={refreshSets}
                   onBadgesUnlocked={onBadgesUnlocked}
