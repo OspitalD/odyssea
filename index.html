@@ -172,7 +172,8 @@
   const ROUTES = {
     AUJOURDHUI: '/aujourdhui',
     SEMAINE:    '/semaine',
-    STATS:      '/stats',
+    HEROS:      '/heros',
+    STATS:      '/stats',     // legacy — redirige vers /heros (gardé pour bookmarks)
     REGLAGES:   '/reglages',
   };
   const DEFAULT_ROUTE = ROUTES.AUJOURDHUI;
@@ -196,6 +197,67 @@
     { min: 30,  name: 'Héros',     token: 'var(--rank-heros)'    },
     { min: 60,  name: 'Demi-dieu', token: 'var(--rank-demidieu)' },
     { min: 100, name: 'Olympien',  token: 'var(--rank-olympien)' },
+  ];
+
+  /* ==========================================================
+     ATHX STANDARDS (SPEC §11) — targets bodyweight-based pour les
+     4 lifts principaux du programme. Phase 2 ajoute pull-ups / jumps
+     / row 2K / 5K running quand l'app trackera ces formats.
+     ========================================================== */
+  const ATHX_STANDARDS = [
+    {
+      id: 'squat',
+      name: 'Back Squat',
+      pattern: /back squat|^squat$|zercher squat/i,
+      kind: 'lift',
+      startBW: 1.8,
+      targetBW: 2.0,
+      radarAxis: 'squat',
+    },
+    {
+      id: 'deadlift',
+      name: 'Deadlift',
+      pattern: /deadlift|^dl$/i,
+      kind: 'lift',
+      startBW: 2.2,
+      targetBW: 2.5,
+      radarAxis: 'deadlift',
+    },
+    {
+      id: 'bench',
+      name: 'Bench Press',
+      pattern: /bench press|pin bench|low incline press/i,
+      kind: 'lift',
+      startBW: 1.2,
+      targetBW: 1.5,
+      radarAxis: 'push',
+    },
+    {
+      id: 'ohp',
+      name: 'Overhead Press',
+      pattern: /^ohp|overhead press|seated press/i,
+      kind: 'lift',
+      startBW: 0.8,
+      targetBW: 1.0,
+      radarAxis: 'push',
+    },
+    {
+      id: 'row',
+      name: 'Pendlay Row',
+      pattern: /pendlay row|barbell row/i,
+      kind: 'lift',
+      startBW: 1.0,
+      targetBW: 1.5,
+      radarAxis: 'pull',
+    },
+  ];
+
+  const RADAR_AXES = [
+    { id: 'squat',     label: 'Squat'   },
+    { id: 'deadlift',  label: 'DL'      },
+    { id: 'push',      label: 'Push'    },
+    { id: 'pull',      label: 'Pull'    },
+    { id: 'cond',      label: 'Cond'    }, // conditioning, placeholder Phase 2+
   ];
 
   // BADGES (SPEC §7.3) — catalogue des achievements.
@@ -587,6 +649,108 @@
   }
 
   /* ==========================================================
+     HERO STATS (SPEC §11 Avatar du Héros)
+     ========================================================== */
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+
+  // Match un set à un standard ATHX par regex sur exerciseName.
+  const matchStandard = (exerciseName) =>
+    ATHX_STANDARDS.find(s => s.pattern.test(exerciseName || ''));
+
+  // Calcule pour chaque standard : best e1RM, ratio current/target.
+  // Retourne array [{id, name, bestE1RM, ratioBW, progress, ...}]
+  // - ratioBW : best e1RM / BW (null si pas de BW)
+  // - progress : (ratioBW - startBW) / (targetBW - startBW), clampé 0..1
+  function computeStandards(allSets, bodyweight) {
+    return ATHX_STANDARDS.map(std => {
+      const matches = allSets.filter(s => std.pattern.test(s.exerciseName || '') && s.e1RM);
+      const bestE1RM = matches.length ? Math.max(...matches.map(s => s.e1RM)) : 0;
+      const ratioBW = bodyweight > 0 ? bestE1RM / bodyweight : null;
+      const progress = ratioBW != null
+        ? clamp01((ratioBW - std.startBW) / (std.targetBW - std.startBW))
+        : 0;
+      return { ...std, bestE1RM, ratioBW, progress };
+    });
+  }
+
+  // Agrège les standards par axe radar (push = avg de bench+ohp).
+  function aggregateRadar(standards) {
+    const byAxis = {};
+    for (const std of standards) {
+      const ax = std.radarAxis;
+      (byAxis[ax] ||= []).push(std.progress);
+    }
+    return RADAR_AXES.map(ax => ({
+      id: ax.id,
+      label: ax.label,
+      value: byAxis[ax.id] && byAxis[ax.id].length
+        ? byAxis[ax.id].reduce((a, b) => a + b, 0) / byAxis[ax.id].length
+        : 0,
+    }));
+  }
+
+  // Compute les 5 attributs RPG depuis l'historique complet.
+  // - Sthénos : moyenne des progress des 4 lifts principaux (Squat/DL/Bench/OHP)
+  // - Bia     : DL progress (puissance brute) — TODO jumps en Phase 2+
+  // - Pónos   : volume cumulé 4 sem glissantes, normalisé sur baseline
+  // - Mètis   : ratio (sets PR) / (sessions completed)
+  // - Areté   : moyenne des 4 ci-dessus
+  async function computeHeroStats() {
+    const [allSets, sessions, bwPref, currentWeek] = await Promise.all([
+      db.sets.toArray(),
+      db.sessions.toArray(),
+      db.prefs.get('bodyweight'),
+      Promise.resolve(getCurrentWeek()),
+    ]);
+    const bw = bwPref?.value || 0;
+    const standards = computeStandards(allSets, bw);
+
+    const sthenos = (() => {
+      const main = standards.filter(s => ['squat', 'deadlift', 'bench', 'ohp'].includes(s.id));
+      if (!main.length) return 0;
+      return main.reduce((a, s) => a + s.progress, 0) / main.length;
+    })();
+
+    const bia = standards.find(s => s.id === 'deadlift')?.progress || 0;
+
+    const ponos = (() => {
+      const since = currentWeek - 3;
+      const recent = allSets.filter(s => s.week >= since && s.completedAt);
+      const vl = recent.reduce((a, s) => a + (s.weight || 0) * (s.reps || 0), 0);
+      // Baseline arbitraire pour normaliser : 80 000 kg sur 4 sem = "haut"
+      return clamp01(vl / 80000);
+    })();
+
+    const completedSessions = sessions.filter(s => s.completedAt);
+    const prCount = allSets.filter(s => s.isPR).length;
+    const metis = completedSessions.length > 0
+      ? clamp01(prCount / completedSessions.length)
+      : 0;
+
+    const arete = (sthenos + bia + ponos + metis) / 4;
+
+    return {
+      sthenos, bia, ponos, metis, arete,
+      standards,
+      radar: aggregateRadar(standards),
+      bodyweight: bw,
+      sessionsCompleted: completedSessions.length,
+      prCount,
+    };
+  }
+
+  // Hook : compute les stats hero, refresh sur tick (post session/PR).
+  const useHeroStats = (refreshKey = 0) => {
+    const [stats, setStats] = useState(null);
+    useEffect(() => {
+      let alive = true;
+      computeHeroStats().then(s => { if (alive) setStats(s); });
+      return () => { alive = false; };
+    }, [refreshKey]);
+    return stats;
+  };
+
+  /* ==========================================================
      BADGES — DB helpers + checkBadges + lazy confetti loader
      ========================================================== */
   async function unlockedBadgeIds() {
@@ -840,6 +1004,18 @@
         'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z',
       ]} />
     ),
+    // Colonne dorique stylisée — symbole Héros (cohérent avec la mythologie Ω)
+    column: (color, size) => (
+      <Icon size={size} color={color} d={[
+        'M5 4 H19',         // chapiteau haut
+        'M4 6 H20',         // chapiteau base
+        'M7 6 V18',         // fût gauche
+        'M12 6 V18',        // fût central
+        'M17 6 V18',        // fût droit
+        'M4 18 H20',        // socle
+        'M5 20 H19',        // base socle
+      ]} stroke={2} />
+    ),
   };
 
   /* ==========================================================
@@ -881,7 +1057,7 @@
   const NAV_ITEMS = [
     { id: 'today',    to: ROUTES.AUJOURDHUI, label: "Aujourd'hui", icon: Icons.dumbbell, activeColor: 'var(--accent-laurel)'  },
     { id: 'week',     to: ROUTES.SEMAINE,    label: 'Semaine',     icon: Icons.calendar, activeColor: 'var(--accent-royal)'   },
-    { id: 'stats',    to: ROUTES.STATS,      label: 'Stats',       icon: Icons.scroll,   activeColor: 'var(--accent-laurel)'  },
+    { id: 'heros',    to: ROUTES.HEROS,      label: 'Héros',       icon: Icons.column,   activeColor: 'var(--accent-olympus)' },
     { id: 'settings', to: ROUTES.REGLAGES,   label: 'Réglages',    icon: Icons.settings, activeColor: 'var(--accent-olympus)' },
   ];
 
@@ -1146,6 +1322,211 @@
       </div>
     </div>
   );
+
+  /* ==========================================================
+     RadarChart — pentagon SVG 5 axes
+     `axes` = [{id, label, value 0..1}, ...]
+     ========================================================== */
+  const RadarChart = ({ axes, size = 240, color = 'var(--accent-laurel)' }) => {
+    const cx = size / 2, cy = size / 2;
+    const r = (size / 2) - 28;
+    const N = axes.length;
+    const point = (i, value) => {
+      const angle = (i * 2 * Math.PI) / N - Math.PI / 2;
+      return [cx + r * value * Math.cos(angle), cy + r * value * Math.sin(angle)];
+    };
+    const labelPoint = (i) => {
+      const angle = (i * 2 * Math.PI) / N - Math.PI / 2;
+      const lr = r + 16;
+      return [cx + lr * Math.cos(angle), cy + lr * Math.sin(angle)];
+    };
+    const grid = [0.25, 0.5, 0.75, 1];
+    const polyAt = (value) => axes.map((_, i) => point(i, value).join(',')).join(' ');
+    const valuePoly = axes.map((a, i) => point(i, a.value).join(',')).join(' ');
+
+    return (
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Radar des performances">
+        {/* Grille concentrique */}
+        {grid.map((g, idx) => (
+          <polygon key={idx} points={polyAt(g)}
+                   fill="none"
+                   stroke="var(--border-subtle)"
+                   strokeWidth={idx === grid.length - 1 ? 1 : 0.6} />
+        ))}
+        {/* Axes */}
+        {axes.map((_, i) => {
+          const [x, y] = point(i, 1);
+          return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="var(--border-subtle)" strokeWidth={0.6} />;
+        })}
+        {/* Polygone valeurs */}
+        <polygon points={valuePoly}
+                 fill={color} fillOpacity="0.15"
+                 stroke={color} strokeWidth="1.5" />
+        {/* Points sur les axes */}
+        {axes.map((a, i) => {
+          const [x, y] = point(i, a.value);
+          return <circle key={`p${i}`} cx={x} cy={y} r={3} fill={color} />;
+        })}
+        {/* Labels */}
+        {axes.map((a, i) => {
+          const [x, y] = labelPoint(i);
+          return (
+            <text key={`l${i}`} x={x} y={y}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fontSize="11"
+                  fontWeight="700"
+                  fill="var(--text-secondary)"
+                  style={{ letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+              {a.label}
+            </text>
+          );
+        })}
+      </svg>
+    );
+  };
+
+  /* ==========================================================
+     HeroAvatar — bloc identitaire : Ω + rang + streak.
+     ========================================================== */
+  const HeroAvatar = ({ streak }) => {
+    const rank = streak ? getRank(streak.currentStreak) : STREAK_RANKS[0];
+    const count = streak?.currentStreak ?? 0;
+    return (
+      <div style={{
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 16,
+        padding: '24px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 12,
+      }}>
+        <div className="greek" style={{
+          fontSize: 96,
+          color: 'var(--accent-olympus)',
+          fontStyle: 'italic',
+          lineHeight: 0.9,
+          letterSpacing: '-2px',
+        }}>Ω</div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{
+            fontSize: 22,
+            fontWeight: 800,
+            color: rank.token,
+            letterSpacing: '-0.3px',
+          }}>{rank.name}</div>
+          <div style={{
+            marginTop: 4,
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+            textTransform: 'uppercase',
+            letterSpacing: '1.2px',
+            fontWeight: 700,
+          }}>
+            {count} session{count > 1 ? 's' : ''} consécutive{count > 1 ? 's' : ''}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /* ==========================================================
+     StatChip — 1 attribut RPG (Sthénos / Bia / ...) avec valeur 0..1
+     ========================================================== */
+  const StatChip = ({ label, value, sub }) => {
+    const pct = Math.round(value * 100);
+    return (
+      <div style={{
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 12,
+        padding: '12px 14px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+          <div style={{
+            fontSize: 11,
+            color: 'var(--text-tertiary)',
+            textTransform: 'uppercase',
+            letterSpacing: '1.5px',
+            fontWeight: 700,
+          }}>{label}</div>
+          <div style={{
+            fontSize: 16,
+            fontWeight: 800,
+            color: 'var(--text-primary)',
+          }}>{pct}</div>
+        </div>
+        {/* barre de progression discrète */}
+        <div style={{
+          height: 4,
+          background: 'var(--bg-primary)',
+          borderRadius: 2,
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            width: `${pct}%`,
+            height: '100%',
+            background: 'var(--accent-laurel)',
+            transition: 'width var(--dur-normal) var(--ease-out)',
+          }} />
+        </div>
+        {sub && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{sub}</div>}
+      </div>
+    );
+  };
+
+  /* ==========================================================
+     StandardBar — barre de progression couleur graduée
+     blood (0%) → olympus (50%) → laurel (100%)
+     ========================================================== */
+  const StandardBar = ({ standard, bodyweight }) => {
+    const pct = Math.round(standard.progress * 100);
+    const color = standard.progress >= 1 ? 'var(--accent-laurel)'
+                : standard.progress >= 0.5 ? 'var(--accent-olympus)'
+                : 'var(--accent-blood)';
+    return (
+      <div style={{
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 12,
+        padding: '12px 14px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>{standard.name}</div>
+          <div style={{ fontSize: 13, fontWeight: 800, color }}>{pct}%</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8, fontSize: 11, color: 'var(--text-tertiary)' }}>
+          {bodyweight > 0 && standard.bestE1RM > 0 ? (
+            <>
+              <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{standard.ratioBW.toFixed(2)}× BW</span>
+              <span>·</span>
+              <span>{standard.startBW}× → {standard.targetBW}× BW</span>
+            </>
+          ) : (
+            <span>{standard.startBW}× → {standard.targetBW}× BW · {bodyweight > 0 ? 'pas de set tracké' : 'BW non défini'}</span>
+          )}
+        </div>
+        <div style={{
+          height: 6,
+          background: 'var(--bg-primary)',
+          borderRadius: 3,
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            width: `${pct}%`,
+            height: '100%',
+            background: color,
+            transition: 'width var(--dur-normal) var(--ease-out), background var(--dur-normal) var(--ease-out)',
+          }} />
+        </div>
+      </div>
+    );
+  };
 
   /* ==========================================================
      BadgeIcon + BadgeToast + BadgeCard
@@ -1777,17 +2158,76 @@
     );
   };
 
-  const StatsPage = () => {
+  const HerosPage = () => {
     const [refresh, setRefresh] = useState(0);
+    const streak = useStreak(refresh);
+    const heroStats = useHeroStats(refresh);
     const unlocked = useUnlockedBadges(refresh);
     const prs = useAllPRs(refresh);
 
-    // Reload à chaque visite (au cas où on vient de unlocker un badge)
+    // Reload à chaque visite (au cas où on vient de unlocker un badge ou battre un PR)
     useEffect(() => { setRefresh(r => r + 1); }, []);
 
     return (
-      <PageWrap title="Stats" subtitle="Badges débloqués · Wall of PRs">
-        <div style={{ marginBottom: 18 }}>
+      <PageWrap title="Héros" subtitle="Sthénos · Bia · Pónos · Mètis · Áreté">
+        {/* Avatar identitaire : Ω + rang + streak */}
+        <HeroAvatar streak={streak} />
+
+        {/* 5 stats RPG en grille 2 colonnes (Areté en pleine largeur en bas) */}
+        {heroStats && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
+              Attributs
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+              <StatChip label="Sthénos" value={heroStats.sthenos} sub="Force pure" />
+              <StatChip label="Bia"     value={heroStats.bia}     sub="Puissance" />
+              <StatChip label="Pónos"   value={heroStats.ponos}   sub="Endurance" />
+              <StatChip label="Mètis"   value={heroStats.metis}   sub="Densité PR" />
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <StatChip label="Áreté" value={heroStats.arete} sub="Excellence globale — moyenne des 4 attributs" />
+            </div>
+          </div>
+        )}
+
+        {/* Radar des performances 5 axes */}
+        {heroStats && (
+          <div style={{ marginTop: 18 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
+              Radar
+            </div>
+            <Card>
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <RadarChart axes={heroStats.radar} size={260} />
+              </div>
+              {!heroStats.bodyweight && (
+                <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'center' }}>
+                  Saisis ton bodyweight dans Réglages pour activer le radar.
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
+
+        {/* Standards ATHX en barres de progression, triés desc par % */}
+        {heroStats && (
+          <div style={{ marginTop: 18 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
+              Standards ATHX
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {[...heroStats.standards]
+                .sort((a, b) => b.progress - a.progress)
+                .map(std => (
+                  <StandardBar key={std.id} standard={std} bodyweight={heroStats.bodyweight} />
+                ))}
+            </div>
+          </div>
+        )}
+
+        {/* Achievements */}
+        <div style={{ marginTop: 22, marginBottom: 18 }}>
           <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
             Achievements
           </div>
@@ -2067,7 +2507,8 @@
               <Routes>
                 <Route path={ROUTES.AUJOURDHUI} element={<AujourdhuiPage />} />
                 <Route path={ROUTES.SEMAINE}    element={<SemainePage />} />
-                <Route path={ROUTES.STATS}      element={<StatsPage />} />
+                <Route path={ROUTES.HEROS}      element={<HerosPage />} />
+                <Route path={ROUTES.STATS}      element={<HerosPage />} />
                 <Route path={ROUTES.REGLAGES}   element={<ReglagesPage />} />
                 <Route path="*" element={<AujourdhuiPage />} />
               </Routes>
