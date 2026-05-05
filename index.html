@@ -269,6 +269,28 @@
   };
 
   /* ==========================================================
+     CALCULS (SPEC v5 §10)
+     ========================================================== */
+  const epley = (weight, reps) => weight * (1 + 0.0333 * reps);
+
+  // Stress Index : (weight/e1RM_known) × reps × f_rir.
+  // Si pas d'e1RM_known, on utilise l'e1RM du set lui-même (fallback)
+  // — donne une valeur "interne" au set, comparable entre sets de même exo.
+  const stressIndex = (weight, reps, rir, e1RMKnown) => {
+    const ref = e1RMKnown || epley(weight, reps);
+    const fRir = 1 + 1 / ((rir || 0) + 1);
+    return (weight / ref) * reps * fRir;
+  };
+
+  const volumeLoad = (sets) => sets.reduce((s, x) => s + (x.weight || 0) * (x.reps || 0), 0);
+
+  // Best e1RM parmi un tableau de sets (ignore null/undefined).
+  const bestE1RM = (sets) => sets.reduce((m, s) => (s.e1RM > m ? s.e1RM : m), 0);
+
+  // Round à 0.5 (utile pour les steppers fractionnaires).
+  const round05 = (x) => Math.round(x * 2) / 2;
+
+  /* ==========================================================
      DATA LAYER — Dexie / IndexedDB (SPEC v5 §9)
      Schéma complet anticipé pour Phase 2 et 3 (évite migrations lourdes).
      ========================================================== */
@@ -352,6 +374,44 @@
       return () => { alive = false; };
     }, [week, refreshKey]);
     return byDay;
+  };
+
+  // Hook : lit tous les sets d'une session (week+sessionDay), groupés par
+  // exerciseSlot, triés par setNumber. Renvoie [setsBySlot, refresh].
+  const useSetsForDay = (week, sessionDay) => {
+    const [bySlot, setBySlot] = useState(null);
+    const [tick, setTick] = useState(0);
+    const refresh = useCallback(() => setTick(t => t + 1), []);
+    useEffect(() => {
+      if (!sessionDay) { setBySlot({}); return; }
+      let alive = true;
+      db.sets.where('week').equals(week).toArray().then(all => {
+        if (!alive) return;
+        const filtered = all.filter(s => s.sessionDay === sessionDay);
+        filtered.sort((a, b) => (a.exerciseSlot - b.exerciseSlot) || (a.setNumber - b.setNumber));
+        const grouped = {};
+        for (const s of filtered) (grouped[s.exerciseSlot] ||= []).push(s);
+        setBySlot(grouped);
+      });
+      return () => { alive = false; };
+    }, [week, sessionDay, tick]);
+    return [bySlot, refresh];
+  };
+
+  // Hook : best e1RM historique pour un exo donné (sert d'e1RM_known).
+  const useBestE1RMFor = (exerciseName, refreshKey) => {
+    const [best, setBest] = useState(null);
+    useEffect(() => {
+      if (!exerciseName) return;
+      let alive = true;
+      db.sets.toArray().then(all => {
+        if (!alive) return;
+        const matches = all.filter(s => s.exerciseName === exerciseName && s.e1RM);
+        setBest(matches.length ? Math.max(...matches.map(s => s.e1RM)) : 0);
+      });
+      return () => { alive = false; };
+    }, [exerciseName, refreshKey]);
+    return best;
   };
 
   /* ==========================================================
@@ -595,7 +655,7 @@
   };
 
   /* ==========================================================
-     UI primitives (extension Mer-Jeu)
+     UI primitives
      ========================================================== */
   const Card = ({ children, style }) => (
     <div style={{
@@ -617,6 +677,89 @@
     </div>
   );
 
+  // Stepper générique : boutons d'incrément/décrément autour d'une valeur
+  // centrale. `steps` = liste de delta (ex: [-5, -2.5, +2.5, +5]).
+  // Utilisé pour Weight et Reps (avec steps différents).
+  const Stepper = ({ value, onChange, steps, unit = '', min = 0, max = 9999, fontSize = 30 }) => {
+    const apply = (delta) => {
+      const next = Math.max(min, Math.min(max, round05((value || 0) + delta)));
+      onChange(next);
+    };
+    const halfPoint = Math.floor(steps.length / 2);
+    const minus = steps.slice(0, halfPoint);
+    const plus = steps.slice(halfPoint);
+    const StepBtn = ({ delta }) => {
+      const label = (delta > 0 ? '+' : '') + delta;
+      return (
+        <button
+          type="button"
+          onClick={() => apply(delta)}
+          style={{
+            flex: 1,
+            background: 'var(--bg-primary)',
+            border: '1px solid var(--border-strong)',
+            borderRadius: 10,
+            color: 'var(--text-primary)',
+            fontSize: 13,
+            fontWeight: 700,
+            padding: '10px 0',
+            cursor: 'pointer',
+            minWidth: 44,
+          }}
+        >{label}</button>
+      );
+    };
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {minus.map(d => <StepBtn key={d} delta={d} />)}
+        <div style={{
+          flex: '0 0 auto',
+          minWidth: 80,
+          textAlign: 'center',
+          fontSize,
+          fontWeight: 800,
+          letterSpacing: '-0.5px',
+          color: 'var(--text-primary)',
+          padding: '0 6px',
+        }}>
+          {value}<span style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 600, marginLeft: 4 }}>{unit}</span>
+        </div>
+        {plus.map(d => <StepBtn key={d} delta={d} />)}
+      </div>
+    );
+  };
+
+  // RIR toggle : 6 cercles 0..5. Le sélectionné est rempli en --accent-laurel.
+  // Convention : 0 = à l'échec, 5 = très facile.
+  const RirToggle = ({ value, onChange }) => (
+    <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between' }}>
+      {[0, 1, 2, 3, 4, 5].map(n => {
+        const selected = value === n;
+        return (
+          <button
+            key={n}
+            type="button"
+            onClick={() => onChange(n)}
+            aria-label={`RIR ${n}`}
+            aria-pressed={selected}
+            style={{
+              flex: 1,
+              minWidth: 44, minHeight: 44,
+              borderRadius: '50%',
+              background: selected ? 'var(--accent-laurel)' : 'transparent',
+              border: `1.5px solid ${selected ? 'var(--accent-laurel)' : 'var(--border-strong)'}`,
+              color: selected ? '#0D0F0E' : 'var(--text-secondary)',
+              fontSize: 14,
+              fontWeight: 800,
+              cursor: 'pointer',
+              transition: 'all var(--dur-fast) var(--ease-out)',
+            }}
+          >{n}</button>
+        );
+      })}
+    </div>
+  );
+
   /* ==========================================================
      PAGES — mocks Mardi.
      - /aujourdhui → Mer/Jeu : steppers, saisie set, calculs live
@@ -624,17 +767,227 @@
      - /stats      → Jeu/Ven : e1RM par exo + delta + (badges N3)
      - /reglages   → Ven : ATHX date, sons, reset, export
      ========================================================== */
+  // ExoCard : 1 carte par exo, accordéon, saisie set complète.
+  const ExoCard = ({ ex, week, sessionDay, sets, isOpen, onToggle, onSetValidated }) => {
+    const lastSet = sets && sets.length ? sets[sets.length - 1] : null;
+    // Pré-remplit weight/reps avec les valeurs du dernier set, ou défauts.
+    const [weight, setWeight] = useState(() => lastSet?.weight ?? 0);
+    const [reps, setReps] = useState(() => lastSet?.reps ?? 5);
+    const [rir, setRir] = useState(() => lastSet?.rir ?? 2);
+
+    // À l'ouverture après une validation, refléter le dernier set saisi.
+    useEffect(() => {
+      if (lastSet) {
+        setWeight(lastSet.weight);
+        setReps(lastSet.reps);
+        setRir(lastSet.rir);
+      }
+    }, [lastSet?.id]);
+
+    const historicalBest = useBestE1RMFor(ex.exerciseName, sets?.length || 0);
+    const previewE1RM = weight > 0 && reps > 0 ? round05(epley(weight, reps)) : 0;
+    const previewSI = weight > 0 && reps > 0 ? stressIndex(weight, reps, rir, historicalBest || previewE1RM) : 0;
+    const sessionVL = volumeLoad(sets || []);
+    const sessionBest = bestE1RM(sets || []);
+
+    const nextSetNumber = (sets?.length || 0) + 1;
+    const isPreviewPR = historicalBest != null && historicalBest > 0 && previewE1RM > historicalBest;
+
+    const validate = async () => {
+      if (weight <= 0 || reps <= 0) return;
+      const e1RM = round05(epley(weight, reps));
+      await db.sets.add({
+        week,
+        sessionDay,
+        exerciseSlot: ex.exerciseSlot,
+        exerciseName: ex.exerciseName,
+        setNumber: nextSetNumber,
+        weight, reps, rir,
+        e1RM,
+        completedAt: new Date().toISOString(),
+        syncedAt: null,
+      });
+      try { navigator.vibrate && navigator.vibrate(20); } catch {}
+      onSetValidated();
+    };
+
+    return (
+      <Card style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
+        <button
+          type="button"
+          onClick={onToggle}
+          style={{
+            width: '100%',
+            background: 'transparent',
+            border: 'none',
+            color: 'inherit',
+            textAlign: 'left',
+            padding: '14px 16px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'space-between',
+            gap: 12,
+          }}
+        >
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+              Slot {ex.exerciseSlot}{sets && sets.length > 0 && ` · ${sets.length} set${sets.length > 1 ? 's' : ''}`}
+            </div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: 'var(--text-primary)', marginTop: 2 }}>
+              {ex.exerciseName}
+            </div>
+          </div>
+          <span style={{ fontSize: 16, color: 'var(--text-secondary)', flex: '0 0 auto' }}>
+            {isOpen ? '▾' : '▸'}
+          </span>
+        </button>
+
+        {isOpen && (
+          <div style={{ padding: '0 16px 16px' }}>
+            {ex.prescription && (
+              <div style={{
+                fontSize: 12,
+                color: 'var(--text-secondary)',
+                whiteSpace: 'pre-line',
+                lineHeight: 1.55,
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 10,
+                padding: '10px 12px',
+                marginBottom: 12,
+              }}>{ex.prescription}</div>
+            )}
+
+            {/* Bandeau live e1RM + Volume Load (mis à jour à chaque set validé) */}
+            {sets && sets.length > 0 && (
+              <div style={{
+                display: 'flex',
+                gap: 12,
+                fontSize: 12,
+                color: 'var(--text-secondary)',
+                marginBottom: 12,
+                paddingBottom: 12,
+                borderBottom: '1px solid var(--border-subtle)',
+              }}>
+                <div>
+                  <span style={{ color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1px', fontSize: 10, fontWeight: 700 }}>e1RM session </span>
+                  <span style={{ color: 'var(--accent-laurel)', fontWeight: 800, fontSize: 14 }}>{sessionBest} kg</span>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1px', fontSize: 10, fontWeight: 700 }}>VL </span>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{Math.round(sessionVL)} kg</span>
+                </div>
+              </div>
+            )}
+
+            {/* Liste des sets validés (badges) */}
+            {sets && sets.length > 0 && (
+              <ul style={{ margin: '0 0 14px', padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {sets.map(s => {
+                  return (
+                    <li key={s.id} style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      fontSize: 13,
+                      padding: '8px 12px',
+                      background: 'var(--bg-primary)',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: 10,
+                    }}>
+                      <span style={{ color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 700, minWidth: 24 }}>#{s.setNumber}</span>
+                      <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{s.weight} kg</span>
+                      <span style={{ color: 'var(--text-secondary)' }}>×{s.reps}</span>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>RIR {s.rir}</span>
+                      <span style={{ flex: 1 }} />
+                      <span style={{ color: 'var(--accent-laurel)', fontSize: 11, fontWeight: 700 }}>e1RM {s.e1RM}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            {/* Carte saisie du set en cours */}
+            <div>
+              <div style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                justifyContent: 'space-between',
+                marginBottom: 10,
+              }}>
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+                  Set {nextSetNumber}
+                </div>
+                {previewE1RM > 0 && (
+                  <div style={{ fontSize: 11, color: isPreviewPR ? 'var(--accent-olympus)' : 'var(--text-secondary)', fontWeight: 700 }}>
+                    {isPreviewPR && '★ '}e1RM {previewE1RM} · SI {previewSI.toFixed(2)}
+                  </div>
+                )}
+              </div>
+
+              {/* Stepper Weight */}
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>
+                  Weight
+                </div>
+                <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" />
+              </div>
+
+              {/* Stepper Reps */}
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>
+                  Reps
+                </div>
+                <Stepper value={reps} onChange={setReps} steps={[-1, +1]} unit="" max={99} fontSize={26} />
+              </div>
+
+              {/* RIR */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>
+                  RIR · reps en réserve
+                </div>
+                <RirToggle value={rir} onChange={setRir} />
+              </div>
+
+              {/* Bouton validation */}
+              <button
+                type="button"
+                onClick={validate}
+                disabled={weight <= 0 || reps <= 0}
+                style={{
+                  width: '100%',
+                  background: weight > 0 && reps > 0 ? 'var(--accent-laurel)' : 'var(--bg-surface-hover)',
+                  color: weight > 0 && reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)',
+                  border: 'none',
+                  borderRadius: 12,
+                  padding: '14px 0',
+                  fontSize: 13,
+                  fontWeight: 800,
+                  letterSpacing: '1.5px',
+                  textTransform: 'uppercase',
+                  cursor: weight > 0 && reps > 0 ? 'pointer' : 'not-allowed',
+                  transition: 'all var(--dur-fast) var(--ease-out)',
+                }}
+              >Valider set</button>
+            </div>
+          </div>
+        )}
+      </Card>
+    );
+  };
+
   const AujourdhuiPage = () => {
     const { query } = useLocation();
     const week = getCurrentWeek();
     const block = getCurrentBlock(week);
     const todayDay = WEEK_DAYS.find(d => d.idx === getCurrentWeekDayIdx());
-    // Si query.day passé (depuis /semaine), on l'utilise. Sinon, jour courant
-    // si c'est un jour strength, fallback sur le prochain jour strength.
     const requestedDay = query.day || (todayDay?.strength ? todayDay.sessionDay : null);
-    const day = WEEK_DAYS.find(d => d.sessionDay === requestedDay) || WEEK_DAYS[0]; // fallback Lundi
+    const day = WEEK_DAYS.find(d => d.sessionDay === requestedDay) || WEEK_DAYS[0];
     const programmeByDay = useWeekProgramme(week, useSeedTick());
     const exos = (programmeByDay && day.sessionDay) ? (programmeByDay[day.sessionDay] || []) : null;
+
+    const [setsBySlot, refreshSets] = useSetsForDay(week, day.sessionDay);
+    // Slot ouvert (premier par défaut, par §12 Étape 3 "premier ouvert").
+    const [openSlot, setOpenSlot] = useState(1);
 
     return (
       <PageWrap title={day.label} subtitle={`${day.fr} · Bloc ${block.id} · ${block.name} · Sem ${week}/${block.weeks[1]}`}>
@@ -656,24 +1009,16 @@
           </Card>
         ) : (
           exos.map(ex => (
-            <Card key={ex.id} style={{ marginTop: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
-                  Slot {ex.exerciseSlot}
-                </div>
-              </div>
-              <div style={{ fontSize: 17, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>
-                {ex.exerciseName}
-              </div>
-              {ex.prescription && (
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'pre-line', lineHeight: 1.5 }}>
-                  {ex.prescription}
-                </div>
-              )}
-              <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
-                Saisie set : Étape 3.
-              </div>
-            </Card>
+            <ExoCard
+              key={ex.id}
+              ex={ex}
+              week={week}
+              sessionDay={day.sessionDay}
+              sets={setsBySlot ? (setsBySlot[ex.exerciseSlot] || []) : null}
+              isOpen={openSlot === ex.exerciseSlot}
+              onToggle={() => setOpenSlot(openSlot === ex.exerciseSlot ? null : ex.exerciseSlot)}
+              onSetValidated={refreshSets}
+            />
           ))
         )}
       </PageWrap>
