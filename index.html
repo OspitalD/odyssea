@@ -744,10 +744,19 @@
   // Retourne array [{id, name, bestE1RM, ratioBW, progress, ...}]
   // - ratioBW : best e1RM / BW (null si pas de BW)
   // - progress : (ratioBW - startBW) / (targetBW - startBW), clampé 0..1
-  function computeStandards(allSets, bodyweight) {
+  // declaredE1RMByName : map { exerciseName → e1RM déclaré le plus récent
+  // dans db.oneRMs }, optionnel. Si fourni, le bestE1RM affiché est le max
+  // entre le meilleur set logué et le déclaratif (matching via std.pattern,
+  // donc "OHP" déclaré matche le std `ohp` /^ohp/ etc.).
+  function computeStandards(allSets, bodyweight, declaredE1RMByName = {}) {
     return ATHX_STANDARDS.map(std => {
       const matches = allSets.filter(s => std.pattern.test(s.exerciseName || '') && s.e1RM);
-      const bestE1RM = matches.length ? Math.max(...matches.map(s => s.e1RM)) : 0;
+      const setsBest = matches.length ? Math.max(...matches.map(s => s.e1RM)) : 0;
+      let declaredBest = 0;
+      for (const [name, weight] of Object.entries(declaredE1RMByName)) {
+        if (std.pattern.test(name) && weight > declaredBest) declaredBest = weight;
+      }
+      const bestE1RM = Math.max(setsBest, declaredBest);
       const ratioBW = bodyweight > 0 ? bestE1RM / bodyweight : null;
       const progress = ratioBW != null
         ? clamp01((ratioBW - std.startBW) / (std.targetBW - std.startBW))
@@ -1019,19 +1028,67 @@
   };
 
   // Hook : best e1RM historique pour un exo donné (sert d'e1RM_known).
+  // Lit deux sources et renvoie le max :
+  //   1. db.sets : meilleur e1RM des sets logués pour ce exerciseName
+  //      (matching EXACT, pas fuzzy — "Pause Low Incline Press" ne lit
+  //      pas le 1RM "Bench Press").
+  //   2. db.oneRMs : 1RM le plus récent déclaré (par computedAt desc)
+  //      pour ce exerciseName, saisi à l'onboarding ou dans /reglages.
   const useBestE1RMFor = (exerciseName, refreshKey) => {
     const [best, setBest] = useState(null);
     useEffect(() => {
       if (!exerciseName) return;
       let alive = true;
-      db.sets.toArray().then(all => {
+      Promise.all([db.sets.toArray(), db.oneRMs.toArray()]).then(([allSets, allOneRMs]) => {
         if (!alive) return;
-        const matches = all.filter(s => s.exerciseName === exerciseName && s.e1RM);
-        setBest(matches.length ? Math.max(...matches.map(s => s.e1RM)) : 0);
+        const setMatches = allSets.filter(s => s.exerciseName === exerciseName && s.e1RM);
+        const setsBest = setMatches.length ? Math.max(...setMatches.map(s => s.e1RM)) : 0;
+        const declaredRows = allOneRMs.filter(r => r.exerciseName === exerciseName);
+        let declaredBest = 0;
+        if (declaredRows.length) {
+          const latest = declaredRows.reduce((a, b) =>
+            (a.computedAt || '') > (b.computedAt || '') ? a : b);
+          declaredBest = latest.e1RM || latest.weight || 0;
+        }
+        setBest(Math.max(setsBest, declaredBest));
       });
       return () => { alive = false; };
     }, [exerciseName, refreshKey]);
     return best;
+  };
+
+  // Hook : Standards ATHX avec overlay des 1RM déclarés (db.oneRMs).
+  // Recalcule via computeStandards en passant la map { exerciseName →
+  // e1RM déclaré le plus récent }. N'affecte PAS computeHeroStats ni les
+  // attributs RPG (Sthénos / Bia / Pónos / Mètis / Áreté), qui restent
+  // basés uniquement sur les sets logués.
+  const useStandardsDisplay = (refreshKey) => {
+    const [standards, setStandards] = useState(null);
+    useEffect(() => {
+      let alive = true;
+      Promise.all([
+        db.sets.toArray(),
+        db.oneRMs.toArray(),
+        db.prefs.get('bodyweight'),
+      ]).then(([allSets, allOneRMs, bwPref]) => {
+        if (!alive) return;
+        const bw = bwPref?.value || 0;
+        const latestByName = {};
+        for (const row of allOneRMs) {
+          const cur = latestByName[row.exerciseName];
+          if (!cur || (row.computedAt || '') > (cur.computedAt || '')) {
+            latestByName[row.exerciseName] = row;
+          }
+        }
+        const declaredE1RMByName = {};
+        for (const [name, row] of Object.entries(latestByName)) {
+          declaredE1RMByName[name] = row.e1RM || row.weight || 0;
+        }
+        setStandards(computeStandards(allSets, bw, declaredE1RMByName));
+      });
+      return () => { alive = false; };
+    }, [refreshKey]);
+    return standards;
   };
 
   /* ==========================================================
@@ -3625,6 +3682,9 @@
     const heroStats = useHeroStats(refresh);
     const unlocked = useUnlockedBadges(refresh);
     const prs = useAllPRs(refresh);
+    // Standards ATHX avec overlay des 1RM déclarés en /reglages — utilisé
+    // uniquement pour l'affichage. Les attributs RPG restent sets-only.
+    const displayStandards = useStandardsDisplay(refresh);
 
     // Reload à chaque visite (au cas où on vient de unlocker un badge ou battre un PR)
     useEffect(() => { setRefresh(r => r + 1); }, []);
@@ -3650,7 +3710,7 @@
               Standards ATHX
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {[...heroStats.standards]
+              {[...(displayStandards || heroStats.standards)]
                 .sort((a, b) => b.progress - a.progress)
                 .map(std => (
                   <StandardBar key={std.id} standard={std} bodyweight={heroStats.bodyweight} />
@@ -3930,6 +3990,50 @@
     };
     const cancelEdit = () => { setEditingMilestone(null); setEditingValue(''); };
 
+    // 1RM connus — saisie hors onboarding. Lecture : 1RM le plus récent
+    // par exerciseName depuis db.oneRMs. Écriture : append d'une nouvelle
+    // ligne { weight, reps:1, e1RM:weight, computedAt } sans écraser
+    // l'historique. Les exerciseName matchent EXACTEMENT ceux de
+    // ONBOARD_LIFTS — toute divergence casserait useBestE1RMFor.
+    const [oneRMValues, setOneRMValues] = useState({});
+    const [oneRMRefresh, setOneRMRefresh] = useState(0);
+    const [editingLift, setEditingLift] = useState(null);
+    const [oneRMEditValue, setOneRMEditValue] = useState(0);
+
+    useEffect(() => {
+      db.oneRMs.toArray().then(rows => {
+        const latestByName = {};
+        for (const r of rows) {
+          const cur = latestByName[r.exerciseName];
+          if (!cur || (r.computedAt || '') > (cur.computedAt || '')) latestByName[r.exerciseName] = r;
+        }
+        const map = {};
+        for (const [name, row] of Object.entries(latestByName)) {
+          map[name] = row.weight || row.e1RM || 0;
+        }
+        setOneRMValues(map);
+      });
+    }, [oneRMRefresh]);
+
+    const startEditOneRM = (name, currentValue) => {
+      setEditingLift(name);
+      setOneRMEditValue(currentValue || 0);
+    };
+    const cancelEditOneRM = () => { setEditingLift(null); setOneRMEditValue(0); };
+    const saveOneRM = async () => {
+      if (!editingLift || oneRMEditValue <= 0) { cancelEditOneRM(); return; }
+      await db.oneRMs.add({
+        exerciseName: editingLift,
+        weight: oneRMEditValue,
+        reps: 1,
+        e1RM: oneRMEditValue,
+        computedAt: new Date().toISOString(),
+      });
+      setEditingLift(null);
+      setOneRMEditValue(0);
+      setOneRMRefresh(r => r + 1);
+    };
+
     // Sounds toggle
     const [soundsOn, setSoundsOn] = useState(isSoundsEnabled());
     const toggleSounds = async () => {
@@ -4011,6 +4115,106 @@
                 transition: 'all var(--dur-fast) var(--ease-out)',
               }}
             >{bwSaved ? '✓' : 'OK'}</button>
+          </div>
+        </Card>
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+            1RM connus
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 10 }}>
+            Pour le Stress Index et les Standards ATHX. Modifie quand tu testes un nouveau max — l'historique est conservé.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {ONBOARD_LIFTS.map(lift => {
+              const v = oneRMValues[lift.name] || 0;
+              const isEditing = editingLift === lift.name;
+              return (
+                <div key={lift.id} style={{
+                  background: 'var(--bg-primary)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 10,
+                  padding: 12,
+                }}>
+                  {!isEditing ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{lift.name}</span>
+                      <span style={{
+                        fontSize: 14,
+                        fontWeight: 700,
+                        color: v > 0 ? 'var(--accent-laurel)' : 'var(--text-tertiary)',
+                        minWidth: 60,
+                        textAlign: 'right',
+                      }}>
+                        {v > 0 ? `${v} kg` : '—'}
+                      </span>
+                      <button type="button" onClick={() => startEditOneRM(lift.name, v)}
+                        style={{
+                          background: 'transparent',
+                          border: '1px solid var(--border-strong)',
+                          borderRadius: 8,
+                          color: 'var(--text-secondary)',
+                          padding: '0 14px',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          letterSpacing: '1px',
+                          textTransform: 'uppercase',
+                          cursor: 'pointer',
+                          minHeight: 56,
+                        }}>Modifier</button>
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 10, textAlign: 'center', letterSpacing: '0.5px' }}>
+                        {lift.name}
+                      </div>
+                      <div style={{ marginBottom: 12 }}>
+                        <Stepper
+                          value={oneRMEditValue}
+                          onChange={setOneRMEditValue}
+                          steps={[-5, -2.5, +2.5, +5]}
+                          unit="kg"
+                          fontSize={22}
+                          max={500}
+                        />
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button type="button" onClick={cancelEditOneRM}
+                          style={{
+                            flex: 1,
+                            background: 'transparent',
+                            border: '1px solid var(--border-strong)',
+                            borderRadius: 10,
+                            color: 'var(--text-secondary)',
+                            padding: '14px',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            letterSpacing: '1px',
+                            textTransform: 'uppercase',
+                            cursor: 'pointer',
+                            minHeight: 56,
+                          }}>Annuler</button>
+                        <button type="button" onClick={saveOneRM}
+                          disabled={oneRMEditValue <= 0}
+                          style={{
+                            flex: 1,
+                            background: oneRMEditValue > 0 ? 'var(--accent-laurel)' : 'var(--bg-surface-hover)',
+                            border: 'none',
+                            borderRadius: 10,
+                            color: oneRMEditValue > 0 ? '#0D0F0E' : 'var(--text-tertiary)',
+                            padding: '14px',
+                            fontSize: 11,
+                            fontWeight: 800,
+                            letterSpacing: '1px',
+                            textTransform: 'uppercase',
+                            cursor: oneRMEditValue > 0 ? 'pointer' : 'not-allowed',
+                            minHeight: 56,
+                          }}>OK</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </Card>
         <Card style={{ marginTop: 12 }}>
