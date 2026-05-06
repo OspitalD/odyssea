@@ -4834,12 +4834,14 @@
                     aria-label={`Info ${info.label}`}
                     onClick={() => setOpenAttr(isOpen ? null : k)}
                     style={{
-                      width: 24, height: 24, borderRadius: '50%',
+                      width: 16, height: 16, borderRadius: '50%',
                       background: isOpen ? 'var(--accent-olympus)' : 'transparent',
-                      border: isOpen ? 'none' : '1px solid var(--border-strong)',
+                      border: isOpen ? 'none' : '1px solid var(--text-tertiary)',
                       color: isOpen ? 'var(--bg-primary)' : 'var(--text-tertiary)',
-                      fontSize: 12, fontWeight: 800, cursor: 'pointer',
-                      display: 'grid', placeItems: 'center',
+                      fontSize: 9, fontWeight: 600, cursor: 'pointer',
+                      display: 'grid', placeItems: 'center', lineHeight: 1,
+                      opacity: isOpen ? 1 : 0.5,
+                      padding: 0,
                     }}
                   >i</button>
                   {/* Value */}
