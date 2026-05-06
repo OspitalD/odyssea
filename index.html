@@ -258,14 +258,6 @@
     },
   ];
 
-  const RADAR_AXES = [
-    { id: 'squat',     label: 'Squat'   },
-    { id: 'deadlift',  label: 'DL'      },
-    { id: 'push',      label: 'Push'    },
-    { id: 'pull',      label: 'Pull'    },
-    { id: 'cond',      label: 'Cond'    }, // conditioning, placeholder Phase 2+
-  ];
-
   // BADGES (SPEC §7.3) — catalogue des achievements.
   // Chaque badge a un check() async qui peut lire ctx (passé par checkBadges).
   // Trigger : appelés après TERMINER (session_complete) ou VALIDER SET (set_validated).
@@ -764,22 +756,6 @@
     });
   }
 
-  // Agrège les standards par axe radar (push = avg de bench+ohp).
-  function aggregateRadar(standards) {
-    const byAxis = {};
-    for (const std of standards) {
-      const ax = std.radarAxis;
-      (byAxis[ax] ||= []).push(std.progress);
-    }
-    return RADAR_AXES.map(ax => ({
-      id: ax.id,
-      label: ax.label,
-      value: byAxis[ax.id] && byAxis[ax.id].length
-        ? byAxis[ax.id].reduce((a, b) => a + b, 0) / byAxis[ax.id].length
-        : 0,
-    }));
-  }
-
   // Compute les 5 attributs RPG depuis l'historique complet.
   // - Sthénos : moyenne des progress des 4 lifts principaux (Squat/DL/Bench/OHP)
   // - Bia     : DL progress (puissance brute) — TODO jumps en Phase 2+
@@ -823,7 +799,15 @@
     return {
       sthenos, bia, ponos, metis, arete,
       standards,
-      radar: aggregateRadar(standards),
+      // Radar = 5 attributs RPG (cf. Design Context). Chaque axe est
+      // borné [0..1] comme tous les attributs.
+      radar: [
+        { id: 'sthenos', label: 'Sthénos', value: sthenos },
+        { id: 'bia',     label: 'Bia',     value: bia },
+        { id: 'ponos',   label: 'Pónos',   value: ponos },
+        { id: 'metis',   label: 'Mètis',   value: metis },
+        { id: 'arete',   label: 'Áreté',   value: arete },
+      ],
       bodyweight: bw,
       sessionsCompleted: completedSessions.length,
       prCount,
@@ -1280,13 +1264,13 @@
       <div style={{
         marginTop: 10,
         padding: '12px 14px',
-        background: 'rgba(232,160,32,0.08)',
-        border: '1px solid rgba(232,160,32,0.3)',
+        background: 'rgba(185,144,224,0.07)',
+        border: '1px solid rgba(185,144,224,0.28)',
         borderRadius: 12,
       }}>
         <div className="greek" style={{
           fontSize: 14,
-          color: 'var(--accent-olympus)',
+          color: 'var(--accent-royal)',
           fontStyle: 'italic',
           textAlign: 'center',
           marginBottom: pardonsAvailable > 0 ? 10 : 0,
@@ -1297,7 +1281,7 @@
           <button type="button" onClick={handlePardon}
             style={{
               width: '100%',
-              background: 'var(--accent-olympus)',
+              background: 'var(--accent-royal)',
               border: 'none',
               borderRadius: 10,
               color: '#0D0F0E',
@@ -1659,17 +1643,19 @@
           const [x, y] = point(i, a.value);
           return <circle key={`p${i}`} cx={x} cy={y} r={3} fill={color} />;
         })}
-        {/* Labels */}
+        {/* Labels — Greek attribute names en EB Garamond italic.
+            La mythologie vit dans la typo, pas en décoration. */}
         {axes.map((a, i) => {
           const [x, y] = labelPoint(i);
           return (
             <text key={`l${i}`} x={x} y={y}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  fontSize="11"
-                  fontWeight="700"
-                  fill="var(--text-secondary)"
-                  style={{ letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+                  fontSize="13"
+                  fontWeight="500"
+                  fontFamily="var(--font-greek)"
+                  fontStyle="italic"
+                  fill="var(--text-secondary)">
               {a.label}
             </text>
           );
@@ -1689,29 +1675,33 @@
         background: 'var(--bg-surface)',
         border: '1px solid var(--border-subtle)',
         borderRadius: 16,
-        padding: '24px 16px',
+        padding: '18px 18px',
         display: 'flex',
-        flexDirection: 'column',
         alignItems: 'center',
-        gap: 12,
+        gap: 16,
       }}>
+        {/* Ω = brand mark, pas une métrique. Discret, neutre, jamais en or
+            (l'or est réservé au divin : PR, ATHX countdown, milestones). */}
         <div className="greek" style={{
-          fontSize: 96,
-          color: 'var(--accent-olympus)',
+          fontSize: 56,
+          color: 'var(--text-secondary)',
           fontStyle: 'italic',
-          lineHeight: 0.9,
-          letterSpacing: '-2px',
+          lineHeight: 0.85,
+          letterSpacing: '-1.5px',
+          opacity: 0.7,
+          flex: '0 0 auto',
         }}>Ω</div>
-        <div style={{ textAlign: 'center' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
-            fontSize: 22,
+            fontSize: 24,
             fontWeight: 800,
             color: rank.token,
             letterSpacing: '-0.3px',
+            lineHeight: 1.1,
           }}>{rank.name}</div>
           <div style={{
             marginTop: 4,
-            fontSize: 12,
+            fontSize: 11,
             color: 'var(--text-secondary)',
             textTransform: 'uppercase',
             letterSpacing: '1.2px',
@@ -1725,62 +1715,16 @@
   };
 
   /* ==========================================================
-     StatChip — 1 attribut RPG (Sthénos / Bia / ...) avec valeur 0..1
-     ========================================================== */
-  const StatChip = ({ label, value, sub }) => {
-    const pct = Math.round(value * 100);
-    return (
-      <div style={{
-        background: 'var(--bg-surface)',
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 12,
-        padding: '12px 14px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-          <div style={{
-            fontSize: 11,
-            color: 'var(--text-tertiary)',
-            textTransform: 'uppercase',
-            letterSpacing: '1.5px',
-            fontWeight: 700,
-          }}>{label}</div>
-          <div style={{
-            fontSize: 16,
-            fontWeight: 800,
-            color: 'var(--text-primary)',
-          }}>{pct}</div>
-        </div>
-        {/* barre de progression discrète */}
-        <div style={{
-          height: 4,
-          background: 'var(--bg-primary)',
-          borderRadius: 2,
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            width: `${pct}%`,
-            height: '100%',
-            background: 'var(--accent-laurel)',
-            transition: 'width var(--dur-normal) var(--ease-out)',
-          }} />
-        </div>
-        {sub && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{sub}</div>}
-      </div>
-    );
-  };
-
-  /* ==========================================================
-     StandardBar — barre de progression couleur graduée
-     blood (0%) → olympus (50%) → laurel (100%)
+     StandardBar — progression vers un standard ATHX.
+     0-100%  → laurel (victoire mortelle en cours)
+     ≥100%   → olympus (divin, standard atteint)
+     Pas de blood : un point de départ n'est pas une régression.
      ========================================================== */
   const StandardBar = ({ standard, bodyweight }) => {
     const pct = Math.round(standard.progress * 100);
-    const color = standard.progress >= 1 ? 'var(--accent-laurel)'
-                : standard.progress >= 0.5 ? 'var(--accent-olympus)'
-                : 'var(--accent-blood)';
+    const color = standard.progress >= 1
+      ? 'var(--accent-olympus)'
+      : 'var(--accent-laurel)';
     return (
       <div style={{
         background: 'var(--bg-surface)',
@@ -2909,7 +2853,9 @@
       return stations[0];
     })();
 
-    const blockColor = ['var(--text-secondary)', 'var(--accent-laurel)', 'var(--accent-blood)', 'var(--accent-royal)', 'var(--accent-olympus)'][block.id] || 'var(--text-secondary)';
+    // Couleur d'identité par bloc — progression mortel → olympien.
+    // Pas de blood (réservé régression réelle, pas un chapitre du voyage).
+    const blockColor = ['var(--text-secondary)', 'var(--rank-hoplite)', 'var(--rank-stratege)', 'var(--accent-royal)', 'var(--accent-olympus)'][block.id] || 'var(--text-secondary)';
 
     return (
       <PageWrap title="Carte du Voyage" subtitle={`Bloc ${block.id} · ${block.name} · Sem ${week}/20`}>
@@ -2960,11 +2906,12 @@
               );
             })}
 
-            {/* Avatar dot — Ω miniature sur le parcours */}
+            {/* Avatar dot — Ω miniature sur le parcours.
+                Le pulse SMIL <animate> a été retiré : il ne respectait pas
+                prefers-reduced-motion (CSS @media n'affecte pas SMIL).
+                L'avatar reste distinct via couleur de bloc + glyphe Ω. */}
             <g transform={`translate(${avatarPos.x}, ${avatarPos.y - 0.4})`}>
-              <circle r="3.5" fill="var(--bg-primary)" stroke={blockColor} strokeWidth="0.8">
-                <animate attributeName="r" values="3.5;4;3.5" dur="2.4s" repeatCount="indefinite" />
-              </circle>
+              <circle r="3.8" fill="var(--bg-primary)" stroke={blockColor} strokeWidth="0.9" />
               <text textAnchor="middle"
                     dominantBaseline="middle"
                     fontSize="3.5"
@@ -3517,48 +3464,20 @@
     useEffect(() => { setRefresh(r => r + 1); }, []);
 
     return (
-      <PageWrap title="Héros" subtitle="Sthénos · Bia · Pónos · Mètis · Áreté">
-        {/* Avatar identitaire : Ω + rang + streak */}
+      <PageWrap
+        title="Héros"
+        subtitle={
+          <span className="greek" style={{ fontStyle: 'italic' }}>
+            Sthénos · Bia · Pónos · Mètis · Áreté
+          </span>
+        }
+      >
+        {/* Identité : Ω brand mark discret + rang + sessions consécutives */}
         <HeroAvatar streak={streak} />
 
-        {/* 5 stats RPG en grille 2 colonnes (Areté en pleine largeur en bas) */}
-        {heroStats && (
-          <div style={{ marginTop: 14 }}>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
-              Attributs
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
-              <StatChip label="Sthénos" value={heroStats.sthenos} sub="Force pure" />
-              <StatChip label="Bia"     value={heroStats.bia}     sub="Puissance" />
-              <StatChip label="Pónos"   value={heroStats.ponos}   sub="Endurance" />
-              <StatChip label="Mètis"   value={heroStats.metis}   sub="Densité PR" />
-            </div>
-            <div style={{ marginTop: 10 }}>
-              <StatChip label="Áreté" value={heroStats.arete} sub="Excellence globale — moyenne des 4 attributs" />
-            </div>
-          </div>
-        )}
-
-        {/* Radar des performances 5 axes */}
-        {heroStats && (
-          <div style={{ marginTop: 18 }}>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
-              Radar
-            </div>
-            <Card>
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <RadarChart axes={heroStats.radar} size={260} />
-              </div>
-              {!heroStats.bodyweight && (
-                <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'center' }}>
-                  Saisis ton bodyweight dans Réglages pour activer le radar.
-                </div>
-              )}
-            </Card>
-          </div>
-        )}
-
-        {/* Standards ATHX en barres de progression, triés desc par % */}
+        {/* Standards ATHX — la métrique-réponse au Job #2 #1 ("Où en est mon
+            e1RM par rapport au point de départ et à mes objectifs ?").
+            Placée en première position pour porter la hiérarchie. */}
         {heroStats && (
           <div style={{ marginTop: 18 }}>
             <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
@@ -3571,6 +3490,45 @@
                   <StandardBar key={std.id} standard={std} bodyweight={heroStats.bodyweight} />
                 ))}
             </div>
+          </div>
+        )}
+
+        {/* Radar des 5 attributs RPG. Le radar EST la lecture des attributs —
+            plus de StatChips redondants. La synthèse numérique est rendue
+            sous le radar en une seule ligne dense. */}
+        {heroStats && (
+          <div style={{ marginTop: 22 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
+              Attributs · Radar
+            </div>
+            <Card>
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <RadarChart axes={heroStats.radar} size={260} />
+              </div>
+              {/* Synthèse numérique en ligne dense, plutôt que 5 chips */}
+              <div style={{
+                marginTop: 14,
+                paddingTop: 12,
+                borderTop: '1px solid var(--border-subtle)',
+                display: 'flex',
+                flexWrap: 'wrap',
+                justifyContent: 'center',
+                gap: '6px 14px',
+                fontSize: 12,
+              }}>
+                {heroStats.radar.map(ax => (
+                  <span key={ax.id} style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+                    <span className="greek" style={{ fontStyle: 'italic', color: 'var(--text-secondary)' }}>{ax.label}</span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 800 }}>{Math.round(ax.value * 100)}</span>
+                  </span>
+                ))}
+              </div>
+              {!heroStats.bodyweight && (
+                <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'center' }}>
+                  Saisis ton bodyweight dans Réglages pour activer le radar.
+                </div>
+              )}
+            </Card>
           </div>
         )}
 
@@ -3624,57 +3582,12 @@
           </div>
         </div>
 
-        {/* Mur des Cyclopes (Étape 12) — grid visuel des PR cumulés.
-            Plus de PR = plus de Cyclopes barrés = mur dense. */}
-        {prs && prs.length > 0 && (
-          <div style={{ marginBottom: 18 }}>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
-              Mur des Cyclopes · {prs.length} {prs.length > 1 ? 'vaincus' : 'vaincu'}
-            </div>
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(8, 1fr)',
-              gap: 6,
-              padding: 12,
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 14,
-            }}>
-              {prs.map((pr, idx) => (
-                <div key={pr.id}
-                  title={`${pr.exerciseName} · ${pr.weight}kg ×${pr.reps} → e1RM ${pr.e1RM} · Sem ${pr.week}`}
-                  style={{
-                    aspectRatio: '1',
-                    borderRadius: 6,
-                    background: 'rgba(232,160,32,0.12)',
-                    border: '1px solid rgba(232,160,32,0.4)',
-                    display: 'grid',
-                    placeItems: 'center',
-                    color: 'var(--accent-olympus)',
-                    fontSize: 14,
-                    fontWeight: 800,
-                    cursor: 'help',
-                    transition: 'transform var(--dur-fast) var(--ease-out)',
-                    animation: `fade-in 400ms var(--ease-out) ${Math.min(idx * 30, 600)}ms backwards`,
-                  }}>★</div>
-              ))}
-              {/* Compléter la grille avec des cellules vides pour atteindre un multiple de 8 */}
-              {Array.from({ length: (8 - (prs.length % 8)) % 8 }).map((_, i) => (
-                <div key={`pad-${i}`} style={{
-                  aspectRatio: '1',
-                  borderRadius: 6,
-                  background: 'transparent',
-                  border: '1px dashed var(--border-subtle)',
-                  opacity: 0.4,
-                }} />
-              ))}
-            </div>
-          </div>
-        )}
-
+        {/* Wall of PRs · vue canonique des PR cumulés.
+            Le Mur des Cyclopes (grille étoiles) a été retiré : il dupliquait
+            l'information de cette timeline et fragmentait la lecture. */}
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
-            Wall of PRs · timeline
+            Wall of PRs · {prs && prs.length > 0 ? `${prs.length} ${prs.length > 1 ? 'vaincus' : 'vaincu'}` : 'timeline'}
           </div>
           {prs === null ? (
             <Card><div style={{ color: 'var(--text-secondary)' }}>Chargement…</div></Card>
