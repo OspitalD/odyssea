@@ -553,6 +553,23 @@
     { slotIdx: 5, name: 'Box Jump 60cm',      format: 'JUMP', prescription: 'Jump for 10 min 3/min' },
   ];
 
+  // Infer slot format from prescription text when DB doesn't have it
+  const inferFormat = (prescription, name) => {
+    const p = (prescription || '').toLowerCase();
+    const n = (name || '').toLowerCase();
+    if (/\bRPE\b/i.test(prescription) || /\btop\s*set/i.test(prescription) || /backoff/i.test(p)) return 'TOP';
+    if (/double\s*prog/i.test(p) || /\bDBL\b/.test(prescription)) return 'DBL';
+    if (/emom/i.test(p) || /reps?\/min/i.test(p)) return 'EMOM';
+    if (/densit/i.test(p) || /amrap/i.test(p) || /max\s*sets/i.test(p)) return 'DENS';
+    if (/jump/i.test(p) || /jump/i.test(n) || /box\s*jump/i.test(n)) return 'JUMP';
+    if (/throw/i.test(p) || /throw/i.test(n) || /med\s*ball/i.test(n)) return 'THROW';
+    if (/sprint/i.test(p) || /sprint/i.test(n)) return 'SPRINT';
+    if (/\bMAP\b/.test(prescription) || /map/i.test(p)) return 'MAP';
+    // Fallback: look at set/rep patterns
+    if (/\d+\s*[x×]\s*\d+/.test(p)) return 'DBL';
+    return '';
+  };
+
   const SEED_KPI = [
     { label: 'Volume Load', value: '12.4k', unit: 'kg', delta: '+8%', ref: 'vs S4',     accent: 'var(--accent-laurel)' },
     { label: 'Sessions',    value: '2/4',   unit: '',   delta: null,   ref: 'cette sem', accent: null },
@@ -757,6 +774,7 @@
               exerciseSlot: ex.slot,
               exerciseName: ex.name || '',
               prescription: ex.prescription || '',
+              format: ex.format || inferFormat(ex.prescription, ex.name),
             });
           }
         }
@@ -3369,6 +3387,7 @@
     const [streakTick, setStreakTick] = useState(0);
     const streak = useStreak(streakTick);
 
+    const [expandedSlot, setExpandedSlot] = useState(null);
     const [endPhrase, setEndPhrase] = useState(null);
     const [endingSessionId, setEndingSessionId] = useState(null);
     const [terminating, setTerminating] = useState(false);
@@ -3689,52 +3708,75 @@
             ))}
           </div>
 
-          {/* Slot list */}
-          {!day.strength ? (
-            <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)', color: 'var(--text-secondary)', textAlign: 'center' }}>
-              Jour de repos. Pas de session aujourd'hui.
-            </div>
-          ) : exos === null || exos.length === 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
-              {SEED_SLOTS_LUN.map(slot => (
-                <div key={slot.slotIdx} className="ody-tablet" style={{
-                  padding: 'var(--sp-3) var(--sp-4)',
-                  display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
-                }}>
-                  <span className="ody-tactical" style={{ fontSize: 11, color: 'var(--text-tertiary)', minWidth: 18 }}>
-                    {String(slot.slotIdx).padStart(2, '0')}
-                  </span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{slot.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
-                      {slot.format} · {slot.prescription}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
-              {exos.map(ex => (
-                <div key={ex.id} className="ody-tablet" style={{
-                  padding: 'var(--sp-3) var(--sp-4)',
-                  display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
-                }}>
-                  <span className="ody-tactical" style={{ fontSize: 11, color: 'var(--text-tertiary)', minWidth: 18 }}>
-                    {String(ex.exerciseSlot).padStart(2, '0')}
-                  </span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{ex.exerciseName}</div>
-                    {ex.prescription && (
-                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
-                        {ex.prescription}
+          {/* Slot list — tap to expand consignes */}
+          {(() => {
+            const FORMAT_COLORS = {
+              TOP: 'var(--accent-olympus)', DBL: 'var(--accent-laurel)', EMOM: 'var(--accent-royal)',
+              DENS: 'var(--text-secondary)', JUMP: 'var(--accent-blood)', THROW: 'var(--accent-blood)',
+              SPRINT: 'var(--accent-blood)', MAP: 'var(--accent-royal)',
+            };
+            const slots = (exos && exos.length > 0)
+              ? exos.map(ex => ({ idx: ex.exerciseSlot, name: ex.exerciseName, format: ex.format || inferFormat(ex.prescription, ex.exerciseName), prescription: ex.prescription || '' }))
+              : (!day.strength ? [] : SEED_SLOTS_LUN.map(s => ({ idx: s.slotIdx, name: s.name, format: s.format, prescription: s.prescription })));
+
+            if (!day.strength) return (
+              <div style={{ padding: 'var(--sp-5)', textAlign: 'center', color: 'var(--text-tertiary)', border: '1px dashed var(--border-subtle)', borderRadius: 'var(--r-md)' }}>
+                REPOS · JOUR LIBRE
+              </div>
+            );
+            if (slots.length === 0) return null;
+
+            return (
+              <div>
+                <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block' }}>
+                  AU PROGRAMME · {slots.length} SLOTS
+                </Inscription>
+                <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                  {slots.map(slot => {
+                    const isOpen = expandedSlot === slot.idx;
+                    const fmtColor = FORMAT_COLORS[slot.format] || 'var(--text-secondary)';
+                    return (
+                      <div key={slot.idx}>
+                        <button type="button" onClick={() => setExpandedSlot(isOpen ? null : slot.idx)}
+                          style={{
+                            width: '100%', background: 'transparent', border: 'none', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+                            padding: 'var(--sp-4) 0',
+                            borderBottom: '1px solid var(--border-subtle)',
+                          }}>
+                          <span className="ody-tactical" style={{ fontSize: 12, color: 'var(--text-tertiary)', minWidth: 24 }}>
+                            {String(slot.idx).padStart(2, '0')}
+                          </span>
+                          <span style={{ flex: 1, textAlign: 'left', fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-sans)' }}>
+                            {slot.name}
+                          </span>
+                          {slot.format && (
+                            <span style={{
+                              padding: '3px 10px', border: `1px solid ${fmtColor}`, borderRadius: 'var(--r-sm)',
+                              fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-mono)',
+                              color: fmtColor, letterSpacing: '0.08em', textTransform: 'uppercase',
+                            }}>{slot.format}</span>
+                          )}
+                        </button>
+                        {isOpen && slot.prescription && (
+                          <div style={{
+                            padding: '0 0 var(--sp-4) 36px',
+                            borderBottom: '1px solid var(--border-subtle)',
+                            animation: 'fade-in var(--d-fast)',
+                          }}>
+                            <div style={{
+                              fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.55,
+                              fontFamily: 'var(--font-sans)',
+                            }}>{slot.prescription}</div>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
-          )}
+              </div>
+            );
+          })()}
 
           {/* Mantra */}
           <div style={{
@@ -4911,6 +4953,98 @@
             })}
           </div>
         </div>
+
+        {/* ── PROGRESSION e1RM (intégré dans Héros) ── */}
+        <div style={{ marginTop: 'var(--sp-6)' }}>
+          <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block' }}>
+            PROGRESSION · e1RM · 20 SEMAINES
+          </Inscription>
+          <div style={{
+            fontFamily: 'var(--font-greek)', fontStyle: 'italic', fontSize: 13,
+            color: 'var(--text-tertiary)', marginBottom: 'var(--sp-4)',
+          }}>de baseline à record. tu montes.</div>
+
+          {/* Lift tabs */}
+          <div style={{
+            display: 'flex', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)',
+            overflowX: 'auto', WebkitOverflowScrolling: 'touch',
+          }}>
+            {SEED_LIFTS.map(l => {
+              const active = l.key === activeLift;
+              return (
+                <button key={l.key} type="button" onClick={() => setActiveLift(l.key)}
+                  style={{
+                    padding: 'var(--sp-2) var(--sp-4)',
+                    background: active ? 'var(--bg-surface)' : 'transparent',
+                    border: active ? '1px solid var(--accent-laurel)' : '1px solid var(--border-subtle)',
+                    borderRadius: 'var(--r-md)',
+                    color: active ? 'var(--accent-laurel)' : 'var(--text-tertiary)',
+                    fontSize: 12, fontWeight: 700, textTransform: 'uppercase',
+                    letterSpacing: '0.08em', cursor: 'pointer', whiteSpace: 'nowrap',
+                    fontFamily: 'var(--font-sans)',
+                  }}>
+                  {l.key === 'squat' ? 'Squat' : l.key === 'ohp' ? 'OHP' : l.name.split(' ')[0]}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* E1RM Totem Card */}
+          {progLift && (
+            <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)', marginBottom: 'var(--sp-4)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--sp-3)' }}>
+                <div>
+                  <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>{progLift.name}</Inscription>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
+                    <Totem size={40} color="var(--accent-laurel)">{progLastE1rm}</Totem>
+                    <span className="ody-tactical" style={{ fontSize: 13 }}>kg · S5</span>
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>VS BASELINE</Inscription>
+                  <div style={{
+                    fontSize: 16, fontWeight: 800, marginTop: 4,
+                    color: progDelta > 0 ? 'var(--accent-laurel)' : 'var(--text-primary)',
+                    fontFamily: 'var(--font-mono)',
+                  }}>
+                    {progDelta > 0 ? '+' : ''}{progDelta} kg
+                  </div>
+                </div>
+              </div>
+              <E1RMCurve liftKey={activeLift} width={360} height={200} />
+            </div>
+          )}
+
+          {/* Repaires Card */}
+          {progLift && (
+            <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)' }}>
+              <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block' }}>
+                REPÈRES · {progLift.name.toUpperCase()}
+              </Inscription>
+              {[
+                { label: 'Record absolu', value: progLift.record, color: 'var(--accent-olympus)', hint: 'horizon · 1RM théorique' },
+                { label: 'e1RM actuel', value: progLastE1rm, color: 'var(--accent-laurel)', hint: 'sem 5' },
+                { label: 'Baseline', value: progLift.baseline, color: 'var(--text-tertiary)', hint: 'entrée programme' },
+              ].map((rep, i) => (
+                <div key={i} style={{
+                  display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+                  padding: 'var(--sp-3) 0',
+                  borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none',
+                }}>
+                  <div style={{ width: 24, display: 'flex', alignItems: 'center' }}>
+                    <div style={{ width: '100%', height: 0, borderTop: `2px ${i === 2 ? 'dashed' : 'solid'} ${rep.color}` }} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: rep.color }}>{rep.label}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{rep.hint}</div>
+                  </div>
+                  <Totem size={24} color={rep.color}>{rep.value}</Totem>
+                  <span className="ody-tactical" style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>kg</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     );
   };
@@ -5483,7 +5617,7 @@
                 <Route path={ROUTES.AUJOURDHUI}  element={<AujourdhuiPage />} />
                 <Route path={ROUTES.SEMAINE}     element={<SemainePage />} />
                 <Route path={ROUTES.HEROS}       element={<HerosPage />} />
-                <Route path={ROUTES.PROGRESSION} element={<ProgressionPage />} />
+                <Route path={ROUTES.PROGRESSION} element={<HerosPage />} />
                 <Route path={ROUTES.CARTE}       element={<CartePage />} />
                 <Route path={ROUTES.STATS}       element={<HerosPage />} />
                 <Route path={ROUTES.REGLAGES}    element={<ReglagesPage />} />
