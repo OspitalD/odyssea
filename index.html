@@ -756,21 +756,16 @@
     });
   }
 
-  // Compute les 5 attributs RPG depuis l'historique complet.
+  // Compute les 5 attributs RPG sur un sous-ensemble de sets, ancré à
+  // une semaine de référence. Ré-utilisé pour le snapshot actuel ET
+  // pour le snapshot historique (radar comparatif).
   // - Sthénos : moyenne des progress des 4 lifts principaux (Squat/DL/Bench/OHP)
   // - Bia     : DL progress (puissance brute) — TODO jumps en Phase 2+
-  // - Pónos   : volume cumulé 4 sem glissantes, normalisé sur baseline
-  // - Mètis   : ratio (sets PR) / (sessions completed)
-  // - Areté   : moyenne des 4 ci-dessus
-  async function computeHeroStats() {
-    const [allSets, sessions, bwPref, currentWeek] = await Promise.all([
-      db.sets.toArray(),
-      db.sessions.toArray(),
-      db.prefs.get('bodyweight'),
-      Promise.resolve(getCurrentWeek()),
-    ]);
-    const bw = bwPref?.value || 0;
-    const standards = computeStandards(allSets, bw);
+  // - Pónos   : volume cumulé sur les 4 sem glissantes finissant à anchorWeek
+  // - Mètis   : ratio (sets PR) / (sessions completed) sur le sous-ensemble
+  // - Áreté   : moyenne des 4 ci-dessus
+  function computeAttributes(sets, sessions, bw, anchorWeek) {
+    const standards = computeStandards(sets, bw);
 
     const sthenos = (() => {
       const main = standards.filter(s => ['squat', 'deadlift', 'bench', 'ohp'].includes(s.id));
@@ -781,36 +776,76 @@
     const bia = standards.find(s => s.id === 'deadlift')?.progress || 0;
 
     const ponos = (() => {
-      const since = currentWeek - 3;
-      const recent = allSets.filter(s => s.week >= since && s.completedAt);
+      const since = anchorWeek - 3;
+      const recent = sets.filter(s => s.week >= since && s.week <= anchorWeek && s.completedAt);
       const vl = recent.reduce((a, s) => a + (s.weight || 0) * (s.reps || 0), 0);
       // Baseline arbitraire pour normaliser : 80 000 kg sur 4 sem = "haut"
       return clamp01(vl / 80000);
     })();
 
     const completedSessions = sessions.filter(s => s.completedAt);
-    const prCount = allSets.filter(s => s.isPR).length;
+    const prCount = sets.filter(s => s.isPR).length;
     const metis = completedSessions.length > 0
       ? clamp01(prCount / completedSessions.length)
       : 0;
 
     const arete = (sthenos + bia + ponos + metis) / 4;
 
+    return { sthenos, bia, ponos, metis, arete, standards, completedSessionsCount: completedSessions.length, prCount };
+  }
+
+  // Construit le tableau radar (5 axes) depuis un objet d'attributs.
+  function radarFromAttributes(attrs) {
+    return [
+      { id: 'sthenos', label: 'Sthénos', value: attrs.sthenos },
+      { id: 'bia',     label: 'Bia',     value: attrs.bia },
+      { id: 'ponos',   label: 'Pónos',   value: attrs.ponos },
+      { id: 'metis',   label: 'Mètis',   value: attrs.metis },
+      { id: 'arete',   label: 'Áreté',   value: attrs.arete },
+    ];
+  }
+
+  async function computeHeroStats() {
+    const [allSets, sessions, bwPref, currentWeek] = await Promise.all([
+      db.sets.toArray(),
+      db.sessions.toArray(),
+      db.prefs.get('bodyweight'),
+      Promise.resolve(getCurrentWeek()),
+    ]);
+    const bw = bwPref?.value || 0;
+
+    const current = computeAttributes(allSets, sessions, bw, currentWeek);
+
+    // Snapshot historique : 4 semaines en arrière. Permet au radar
+    // d'afficher un second polygone "Sem -4" pour visualiser la
+    // trajectoire des 5 attributs sur la dernière fenêtre glissante.
+    // Pas dispo avant la sem 5 (rien à comparer) — pastRadar reste null.
+    let pastRadar = null;
+    const pastAnchor = currentWeek - 4;
+    if (pastAnchor >= 1) {
+      const pastSets = allSets.filter(s => s.week <= pastAnchor);
+      const pastSessions = sessions.filter(s => s.week <= pastAnchor);
+      if (pastSets.length > 0) {
+        const past = computeAttributes(pastSets, pastSessions, bw, pastAnchor);
+        pastRadar = radarFromAttributes(past);
+      }
+    }
+
     return {
-      sthenos, bia, ponos, metis, arete,
-      standards,
+      sthenos: current.sthenos,
+      bia: current.bia,
+      ponos: current.ponos,
+      metis: current.metis,
+      arete: current.arete,
+      standards: current.standards,
       // Radar = 5 attributs RPG (cf. Design Context). Chaque axe est
       // borné [0..1] comme tous les attributs.
-      radar: [
-        { id: 'sthenos', label: 'Sthénos', value: sthenos },
-        { id: 'bia',     label: 'Bia',     value: bia },
-        { id: 'ponos',   label: 'Pónos',   value: ponos },
-        { id: 'metis',   label: 'Mètis',   value: metis },
-        { id: 'arete',   label: 'Áreté',   value: arete },
-      ],
+      radar: radarFromAttributes(current),
+      pastRadar,
+      pastAnchorWeek: pastRadar ? pastAnchor : null,
       bodyweight: bw,
-      sessionsCompleted: completedSessions.length,
-      prCount,
+      sessionsCompleted: current.completedSessionsCount,
+      prCount: current.prCount,
     };
   }
 
@@ -1601,9 +1636,12 @@
 
   /* ==========================================================
      RadarChart — pentagon SVG 5 axes
-     `axes` = [{id, label, value 0..1}, ...]
+     `axes`     = [{id, label, value 0..1}, ...] — état actuel (polygone plein)
+     `axesPrev` = même forme — snapshot historique optionnel, rendu en
+       stroke pointillé sans fill, comme une trace fantôme. La hiérarchie
+       est claire : l'actuel domine, le passé est référence.
      ========================================================== */
-  const RadarChart = ({ axes, size = 240, color = 'var(--accent-laurel)' }) => {
+  const RadarChart = ({ axes, axesPrev = null, size = 240, color = 'var(--accent-laurel)' }) => {
     const cx = size / 2, cy = size / 2;
     const r = (size / 2) - 28;
     const N = axes.length;
@@ -1619,6 +1657,9 @@
     const grid = [0.25, 0.5, 0.75, 1];
     const polyAt = (value) => axes.map((_, i) => point(i, value).join(',')).join(' ');
     const valuePoly = axes.map((a, i) => point(i, a.value).join(',')).join(' ');
+    const prevPoly = axesPrev
+      ? axesPrev.map((a, i) => point(i, a.value).join(',')).join(' ')
+      : null;
 
     return (
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Radar des performances">
@@ -1634,11 +1675,20 @@
           const [x, y] = point(i, 1);
           return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="var(--border-subtle)" strokeWidth={0.6} />;
         })}
-        {/* Polygone valeurs */}
+        {/* Snapshot passé : rendu EN-DESSOUS du polygone actuel pour ne
+            pas voler la lecture. Stroke pointillé, pas de fill. */}
+        {prevPoly && (
+          <polygon points={prevPoly}
+                   fill="none"
+                   stroke="var(--text-tertiary)"
+                   strokeWidth="1"
+                   strokeDasharray="3 3" />
+        )}
+        {/* Polygone valeurs (actuel) */}
         <polygon points={valuePoly}
                  fill={color} fillOpacity="0.15"
                  stroke={color} strokeWidth="1.5" />
-        {/* Points sur les axes */}
+        {/* Points sur les axes (actuel) */}
         {axes.map((a, i) => {
           const [x, y] = point(i, a.value);
           return <circle key={`p${i}`} cx={x} cy={y} r={3} fill={color} />;
@@ -3507,8 +3557,41 @@
             </div>
             <Card>
               <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <RadarChart axes={heroStats.radar} size={260} />
+                <RadarChart axes={heroStats.radar} axesPrev={heroStats.pastRadar} size={260} />
               </div>
+              {/* Légende du radar comparatif. N'apparaît que si pastRadar
+                  existe (pas d'historique avant la sem 5). */}
+              {heroStats.pastRadar && (
+                <div style={{
+                  marginTop: 8,
+                  display: 'flex',
+                  justifyContent: 'center',
+                  gap: 16,
+                  fontSize: 10,
+                  color: 'var(--text-tertiary)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '1.2px',
+                  fontWeight: 700,
+                }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span aria-hidden="true" style={{
+                      display: 'inline-block',
+                      width: 14, height: 2,
+                      background: 'var(--accent-laurel)',
+                      borderRadius: 1,
+                    }} />
+                    Actuel · Sem {heroStats.pastAnchorWeek + 4}
+                  </span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span aria-hidden="true" style={{
+                      display: 'inline-block',
+                      width: 14, height: 0,
+                      borderTop: '1.5px dashed var(--text-tertiary)',
+                    }} />
+                    Sem {heroStats.pastAnchorWeek}
+                  </span>
+                </div>
+              )}
               {/* Synthèse numérique en ligne dense, plutôt que 5 chips */}
               <div style={{
                 marginTop: 14,
