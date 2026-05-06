@@ -714,10 +714,12 @@
   };
 
   // Format detection — ordre de précédence strict, premier match gagne
-  function detectFormat(prescription) {
+  // Vérifie prescription + nom d'exo (les sheets mettent souvent le type dans le nom)
+  function detectFormat(prescription, exerciseName) {
     const p = (prescription || '').toLowerCase();
+    const n = (exerciseName || '').toLowerCase();
     // 1. JUMP — patterns très spécifiques, collision faible
-    if (/\b(single effort|max jump|1 max effort|broad jump|vertical jump)\b/.test(p)) return 'jump';
+    if (/\b(single effort|max jump|1 max effort|broad jump|vertical jump)\b/.test(p + ' ' + n)) return 'jump';
     // 2. EMOM / DENSITY — sans "for X min" (faux positif "rest for 2 min")
     if (/\b(emom|every minute on the minute|density set)\b/.test(p)) return 'emom';
     // 3. TOP SET + BACK-OFF
@@ -799,7 +801,7 @@
               exerciseSlot: ex.slot,
               exerciseName: ex.name || '',
               prescription: ex.prescription || '',
-              format: ex.format || detectFormat(ex.prescription),
+              format: ex.format || detectFormat(ex.prescription, ex.name),
             });
           }
         }
@@ -2863,7 +2865,7 @@
     const [jumpDistance, setJumpDistance] = useState(0);
 
     const [formatOverride, setFormatOverride] = useFormatOverride(week, sessionDay, ex.exerciseSlot);
-    const detectedFormat = detectFormat(ex.prescription);
+    const detectedFormat = detectFormat(ex.prescription, ex.exerciseName);
     const format = formatOverride || detectedFormat;
     const fmtMeta = FORMAT_META[format] || FORMAT_META.traditional;
     const isVerticalJump = format === 'jump' && !/\bbroad\b/i.test(ex.prescription || '');
@@ -3827,12 +3829,12 @@
           {(() => {
             const slots = (exos && exos.length > 0)
               ? exos.map(ex => {
-                  const fmt = detectFormat(ex.prescription);
+                  const fmt = detectFormat(ex.prescription, ex.exerciseName);
                   const meta = FORMAT_META[fmt] || FORMAT_META.traditional;
                   return { idx: ex.exerciseSlot, name: ex.exerciseName, formatLabel: meta.label, formatColor: meta.color, prescription: ex.prescription || '' };
                 })
               : (!day.strength ? [] : SEED_SLOTS_LUN.map(s => {
-                  const fmt = detectFormat(s.prescription);
+                  const fmt = detectFormat(s.prescription, s.name);
                   const meta = FORMAT_META[fmt] || FORMAT_META.traditional;
                   return { idx: s.slotIdx, name: s.name, formatLabel: meta.label, formatColor: meta.color, prescription: s.prescription };
                 }));
@@ -4116,7 +4118,7 @@
                 {d.exos.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', paddingLeft: 40 }}>
                     {d.exos.map(ex => {
-                      const fmtId = detectFormat(ex.prescription);
+                      const fmtId = detectFormat(ex.prescription, ex.exerciseName);
                       const fmtInfo = FORMAT_META[fmtId] || FORMAT_META.traditional;
                       return (
                         <span key={ex.id || ex.exerciseSlot} style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
