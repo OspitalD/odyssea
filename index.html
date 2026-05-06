@@ -109,10 +109,12 @@
     }
     .app-main--no-nav { padding-bottom: env(safe-area-inset-bottom, 0px); }
 
-    /* Mode Hyperfocus — cache la bottom nav et le header logo */
-    .app-shell.hyperfocus nav[aria-label="Navigation principale"],
-    .app-shell.hyperfocus header { display: none; }
-    .app-shell.hyperfocus .app-main { padding-bottom: env(safe-area-inset-bottom, 0px); }
+    /* Mode Séance (focus plein écran) — cache la bottom nav et le header logo.
+       !important nécessaire car BottomNav et AppHeader appliquent display via
+       style inline, qui écrase une règle de class normale. */
+    .app-shell.session-focus nav[aria-label="Navigation principale"],
+    .app-shell.session-focus header { display: none !important; }
+    .app-shell.session-focus .app-main { padding-bottom: env(safe-area-inset-bottom, 0px); }
 
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
@@ -2720,6 +2722,289 @@
     );
   };
 
+  /* ==========================================================
+     MODE SÉANCE — sous-composants pour /aujourdhui
+     État 1 (preview) : SessionPreviewCard
+     État 2 (focus)   : SessionFocusHeader + SlotNav + QuitConfirmModal
+     ========================================================== */
+
+  // Chrono de session : tick chaque seconde, format hh:mm:ss.
+  // Source de vérité = startedAt (string ISO), stocké dans le flag
+  // db.prefs.sessionInProgress (lecture facile au reload).
+  const useSessionTimer = (startedAt) => {
+    const [now, setNow] = useState(Date.now());
+    useEffect(() => {
+      if (!startedAt) return;
+      const id = setInterval(() => setNow(Date.now()), 1000);
+      return () => clearInterval(id);
+    }, [startedAt]);
+    if (!startedAt) return '00:00:00';
+    const elapsed = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
+    const h = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+    const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+    const s = String(elapsed % 60).padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  };
+
+  // Header simplifié État 2 : nom session + chrono. Bouton QUITTER fixe en
+  // top-left (au-dessus du flow). Reste visible pendant tout le scroll.
+  const SessionFocusHeader = ({ title, startedAt, onQuit }) => {
+    const elapsed = useSessionTimer(startedAt);
+    return (
+      <>
+        <button
+          type="button"
+          onClick={onQuit}
+          aria-label="Quitter la séance"
+          style={{
+            position: 'fixed',
+            top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+            left: 12,
+            zIndex: 60,
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border-strong)',
+            borderRadius: 12,
+            color: 'var(--text-primary)',
+            padding: '0 16px',
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            minHeight: 56,
+            cursor: 'pointer',
+          }}
+        >← Quitter</button>
+        <div style={{
+          paddingTop: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+          textAlign: 'center',
+          marginBottom: 18,
+        }}>
+          <div style={{
+            fontSize: 11,
+            color: 'var(--text-tertiary)',
+            textTransform: 'uppercase',
+            letterSpacing: '2px',
+            fontWeight: 700,
+            marginBottom: 6,
+          }}>
+            En séance
+          </div>
+          <div style={{
+            fontSize: 22,
+            fontWeight: 800,
+            color: 'var(--text-primary)',
+            letterSpacing: '-0.5px',
+            marginBottom: 6,
+          }}>{title}</div>
+          <div style={{
+            fontFamily: 'var(--font-mono, monospace)',
+            fontSize: 16,
+            color: 'var(--accent-laurel)',
+            fontVariantNumeric: 'tabular-nums',
+            letterSpacing: '1px',
+            fontWeight: 700,
+          }}>{elapsed}</div>
+        </div>
+      </>
+    );
+  };
+
+  // Card compacte lecture seule pour État 1 (preview).
+  // Numéro slot + nom exo + prescription complète, pas de saisie.
+  const SessionPreviewCard = ({ ex, setsCount }) => (
+    <Card style={{ marginTop: 10, padding: '14px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+          Slot {ex.exerciseSlot}{setsCount > 0 && ` · ${setsCount} set${setsCount > 1 ? 's' : ''}`}
+        </div>
+      </div>
+      <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)', marginBottom: ex.prescription ? 8 : 0 }}>
+        {ex.exerciseName}
+      </div>
+      {ex.prescription && (
+        <div style={{
+          fontSize: 12,
+          color: 'var(--text-secondary)',
+          whiteSpace: 'pre-line',
+          lineHeight: 1.55,
+        }}>{ex.prescription}</div>
+      )}
+    </Card>
+  );
+
+  // Barre de navigation fixe en bas en État 2 : Slot N/M, ← →, TERMINER.
+  // Toujours atteignable au pouce. TERMINER actif quand canTerminate=true.
+  const SlotNav = ({ currentSlot, exos, onPrev, onNext, onTerminate, canTerminate, terminating }) => {
+    const idx = exos.findIndex(ex => ex.exerciseSlot === currentSlot);
+    const isFirst = idx <= 0;
+    const isLast = idx >= exos.length - 1;
+    const total = exos.length;
+    return (
+      <div style={{
+        position: 'fixed',
+        bottom: 0, left: '50%',
+        transform: 'translateX(-50%)',
+        width: '100%',
+        maxWidth: 'var(--max-app-width)',
+        padding: '12px 16px calc(env(safe-area-inset-bottom, 0px) + 12px)',
+        background: 'var(--bg-surface)',
+        borderTop: '1px solid var(--border-active)',
+        zIndex: 50,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button
+            type="button"
+            onClick={onPrev}
+            disabled={isFirst}
+            aria-label="Exercice précédent"
+            style={{
+              flex: '0 0 auto',
+              minWidth: 64,
+              minHeight: 56,
+              background: isFirst ? 'transparent' : 'var(--bg-primary)',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 12,
+              color: isFirst ? 'var(--text-tertiary)' : 'var(--text-primary)',
+              fontSize: 22,
+              fontWeight: 800,
+              cursor: isFirst ? 'not-allowed' : 'pointer',
+              opacity: isFirst ? 0.4 : 1,
+            }}
+          >←</button>
+          <div style={{
+            flex: 1,
+            textAlign: 'center',
+            fontSize: 11,
+            color: 'var(--text-secondary)',
+            textTransform: 'uppercase',
+            letterSpacing: '2px',
+            fontWeight: 700,
+          }}>
+            Slot {idx >= 0 ? idx + 1 : 1}/{total}
+          </div>
+          <button
+            type="button"
+            onClick={onNext}
+            disabled={isLast}
+            aria-label="Exercice suivant"
+            style={{
+              flex: '0 0 auto',
+              minWidth: 64,
+              minHeight: 56,
+              background: isLast ? 'transparent' : 'var(--bg-primary)',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 12,
+              color: isLast ? 'var(--text-tertiary)' : 'var(--text-primary)',
+              fontSize: 22,
+              fontWeight: 800,
+              cursor: isLast ? 'not-allowed' : 'pointer',
+              opacity: isLast ? 0.4 : 1,
+            }}
+          >→</button>
+        </div>
+        <button
+          type="button"
+          onClick={onTerminate}
+          disabled={!canTerminate || terminating}
+          style={{
+            width: '100%',
+            background: canTerminate ? 'var(--accent-olympus)' : 'var(--bg-surface-hover)',
+            color: canTerminate ? '#0D0F0E' : 'var(--text-tertiary)',
+            border: 'none',
+            borderRadius: 14,
+            minHeight: 56,
+            padding: '16px 0',
+            fontSize: 14,
+            fontWeight: 800,
+            letterSpacing: '2px',
+            textTransform: 'uppercase',
+            cursor: canTerminate ? 'pointer' : 'not-allowed',
+            opacity: terminating ? 0.6 : 1,
+          }}
+        >{terminating ? '…' : 'Terminer'}</button>
+      </div>
+    );
+  };
+
+  // Modal de confirmation au tap "← QUITTER". Bloque les interactions
+  // sous-jacentes via overlay plein écran.
+  const QuitConfirmModal = ({ onContinue, onQuit }) => (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: 'fixed', inset: 0,
+        background: 'rgba(13,15,14,0.85)',
+        zIndex: 200,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+      }}
+    >
+      <div style={{
+        width: '100%',
+        maxWidth: 360,
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-strong)',
+        borderRadius: 16,
+        padding: 22,
+      }}>
+        <div style={{
+          fontSize: 16,
+          fontWeight: 700,
+          color: 'var(--text-primary)',
+          textAlign: 'center',
+          lineHeight: 1.45,
+          marginBottom: 22,
+        }}>
+          Quitter la séance ? Tes sets sont enregistrés.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <button
+            type="button"
+            onClick={onContinue}
+            style={{
+              width: '100%',
+              background: 'var(--accent-laurel)',
+              color: '#0D0F0E',
+              border: 'none',
+              borderRadius: 12,
+              minHeight: 56,
+              padding: '16px 0',
+              fontSize: 13,
+              fontWeight: 800,
+              letterSpacing: '1.5px',
+              textTransform: 'uppercase',
+              cursor: 'pointer',
+            }}
+          >Continuer</button>
+          <button
+            type="button"
+            onClick={onQuit}
+            style={{
+              width: '100%',
+              background: 'transparent',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 12,
+              minHeight: 56,
+              padding: '16px 0',
+              fontSize: 13,
+              fontWeight: 800,
+              letterSpacing: '1.5px',
+              textTransform: 'uppercase',
+              cursor: 'pointer',
+            }}
+          >Quitter</button>
+        </div>
+      </div>
+    </div>
+  );
+
   const AujourdhuiPage = () => {
     const { query } = useLocation();
     const navigate = useNavigate();
@@ -2732,7 +3017,6 @@
     const exos = (programmeByDay && day.sessionDay) ? (programmeByDay[day.sessionDay] || []) : null;
 
     const [setsBySlot, refreshSets] = useSetsForDay(week, day.sessionDay);
-    const [openSlot, setOpenSlot] = useState(1);
 
     const [streakTick, setStreakTick] = useState(0);
     const streak = useStreak(streakTick);
@@ -2772,24 +3056,123 @@
       /deadlift|back squat|zercher squat/i.test(ex.exerciseName || '')
     );
 
-    // Mode Hyperfocus (SPEC §11) — fond plus dark, nav cachée, only current exo
-    const [hyperfocus, setHyperfocus] = useState(false);
+    // Mode Séance (P0-B) — État 1 (preview) / État 2 (focus plein écran).
+    // sessionActive=true : bottom nav masquée, une seule card, chrono visible.
+    const [sessionActive, setSessionActive] = useState(false);
+    const [sessionStartedAt, setSessionStartedAt] = useState(null);
+    const [currentSlot, setCurrentSlot] = useState(1);
+    const [showQuitModal, setShowQuitModal] = useState(false);
+    // Détection : session déjà terminée par le passé sur ce jour ?
+    const [sessionCompleted, setSessionCompleted] = useState(false);
+
     useEffect(() => {
-      // Toggle CSS class sur app-shell pour cacher la bottom nav.
       const shell = document.querySelector('.app-shell');
       if (!shell) return;
-      if (hyperfocus) shell.classList.add('hyperfocus');
-      else shell.classList.remove('hyperfocus');
-      return () => shell.classList.remove('hyperfocus');
-    }, [hyperfocus]);
+      if (sessionActive) shell.classList.add('session-focus');
+      else shell.classList.remove('session-focus');
+      return () => shell.classList.remove('session-focus');
+    }, [sessionActive]);
+
+    // Restauration du flag sessionInProgress au mount, ET détection
+    // session-déjà-complétée pour ce day. L'auto-clear par expiration est géré
+    // au boot dans App. Ici on restaure uniquement si le flag pointe vers le
+    // jour affiché. Sinon : preview seul, mais on garde le flag intact.
+    useEffect(() => {
+      if (!day.sessionDay) { setSessionCompleted(false); return; }
+      let alive = true;
+      (async () => {
+        try {
+          const existing = await db.sessions.where({ week, sessionDay: day.sessionDay }).first();
+          if (alive) setSessionCompleted(!!existing?.completedAt);
+        } catch { if (alive) setSessionCompleted(false); }
+        try {
+          const flag = await db.prefs.get('sessionInProgress');
+          if (!alive) return;
+          if (flag?.value?.startedAt) {
+            // Re-check expiration ici (defense in depth — l'auto-clear côté App
+            // est async et peut ne pas avoir fini avant ce read).
+            const startedMs = new Date(flag.value.startedAt).getTime();
+            const lastSetMs = flag.value.lastSetAt ? new Date(flag.value.lastSetAt).getTime() : null;
+            const SIX_H = 6 * 3600 * 1000;
+            const TWO_H = 2 * 3600 * 1000;
+            const expired =
+              (Date.now() - startedMs > SIX_H) ||
+              (lastSetMs != null && Date.now() - lastSetMs > TWO_H);
+            if (expired) {
+              try { await db.prefs.delete('sessionInProgress'); } catch {}
+            } else if (flag.value.week === week && flag.value.sessionDay === day.sessionDay) {
+              setSessionStartedAt(flag.value.startedAt);
+              setCurrentSlot(flag.value.currentSlot || 1);
+              setSessionActive(true);
+            }
+          }
+        } catch {}
+      })();
+      return () => { alive = false; };
+    }, [week, day.sessionDay]);
+
+    // Si exos arrive après restauration, garde-fou : si currentSlot pointe vers
+    // un slot qui n'existe plus dans le programme (rare : reseed entre deux
+    // ouvertures), retomber sur le 1er exo.
+    useEffect(() => {
+      if (!sessionActive || !exos || exos.length === 0) return;
+      if (!exos.find(ex => ex.exerciseSlot === currentSlot)) {
+        setCurrentSlot(exos[0].exerciseSlot);
+      }
+    }, [sessionActive, exos, currentSlot]);
 
     // Activation TERMINER : ≥1 set validé sur CHAQUE exo.
     const canTerminate = exos && exos.length > 0 && setsBySlot &&
       exos.every(ex => (setsBySlot[ex.exerciseSlot] || []).length > 0);
 
+    const startSession = async () => {
+      try { navigator.vibrate && navigator.vibrate(10); } catch {}
+      const startedAt = new Date().toISOString();
+      const firstSlot = (exos && exos[0]?.exerciseSlot) || 1;
+      try {
+        await db.prefs.put({
+          key: 'sessionInProgress',
+          value: { week, sessionDay: day.sessionDay, currentSlot: firstSlot, startedAt, lastSetAt: null },
+        });
+      } catch {}
+      setSessionStartedAt(startedAt);
+      setCurrentSlot(firstSlot);
+      setSessionActive(true);
+      try { window.scrollTo({ top: 0, behavior: 'auto' }); } catch {}
+    };
+
+    const navigateSlot = async (newSlot) => {
+      setCurrentSlot(newSlot);
+      try {
+        const flag = await db.prefs.get('sessionInProgress');
+        if (flag?.value) {
+          await db.prefs.put({ key: 'sessionInProgress', value: { ...flag.value, currentSlot: newSlot } });
+        }
+      } catch {}
+      try { window.scrollTo({ top: 0, behavior: 'auto' }); } catch {}
+    };
+
+    const handleSetValidated = async () => {
+      refreshSets();
+      try {
+        const flag = await db.prefs.get('sessionInProgress');
+        if (flag?.value) {
+          await db.prefs.put({ key: 'sessionInProgress', value: { ...flag.value, lastSetAt: new Date().toISOString() } });
+        }
+      } catch {}
+    };
+
+    const quitSession = async () => {
+      try { await db.prefs.delete('sessionInProgress'); } catch {}
+      setSessionActive(false);
+      setSessionStartedAt(null);
+      setShowQuitModal(false);
+    };
+
     const onTerminate = async () => {
       if (!canTerminate || terminating) return;
       setTerminating(true);
+      try { navigator.vibrate && navigator.vibrate(10); } catch {}
       // Marquer la session comme complétée + récupérer son id pour le mood
       let sessionRowId = null;
       try {
@@ -2800,12 +3183,17 @@
         } else {
           sessionRowId = await db.sessions.add({
             week, sessionDay: day.sessionDay,
-            startedAt: new Date().toISOString(),
+            startedAt: sessionStartedAt || new Date().toISOString(),
             completedAt: new Date().toISOString(),
             syncedAt: null,
           });
         }
       } catch {}
+      // Effacer le flag sessionInProgress. On reste en État 2 jusqu'à ce que
+      // SessionEndOverlay → handleEndComplete navigue vers /semaine (unmount =
+      // cleanup automatique de la className .session-focus). Sinon flicker
+      // d'État 1 entre delete-flag et setEndPhrase.
+      try { await db.prefs.delete('sessionInProgress'); } catch {}
       setEndingSessionId(sessionRowId);
       // Bump streak (1× par jour max — multiples sessions le même jour ne cumulent pas)
       try { await bumpStreak(); } catch {}
@@ -2836,6 +3224,71 @@
       navigate(ROUTES.SEMAINE);
     }, [navigate]);
 
+    // ÉTAT 2 — séance plein écran focus
+    if (sessionActive && exos && exos.length > 0) {
+      const currentExo = exos.find(ex => ex.exerciseSlot === currentSlot) || exos[0];
+      const idx = exos.findIndex(ex => ex.exerciseSlot === currentExo.exerciseSlot);
+      return (
+        <>
+          <div style={{ padding: '0 16px 24px' }}>
+            <SessionFocusHeader
+              title={day.label}
+              startedAt={sessionStartedAt}
+              onQuit={() => setShowQuitModal(true)}
+            />
+            <ExoCard
+              key={currentExo.id}
+              ex={currentExo}
+              week={week}
+              sessionDay={day.sessionDay}
+              sets={setsBySlot ? (setsBySlot[currentExo.exerciseSlot] || []) : null}
+              isOpen={true}
+              onToggle={() => {}}
+              onSetValidated={handleSetValidated}
+              onBadgesUnlocked={onBadgesUnlocked}
+            />
+            {/* Espace réservé pour la SlotNav fixe en bas. */}
+            <div style={{ height: 200 }} />
+          </div>
+          <SlotNav
+            currentSlot={currentExo.exerciseSlot}
+            exos={exos}
+            onPrev={() => !((idx) <= 0) && navigateSlot(exos[idx - 1].exerciseSlot)}
+            onNext={() => !((idx) >= exos.length - 1) && navigateSlot(exos[idx + 1].exerciseSlot)}
+            onTerminate={onTerminate}
+            canTerminate={canTerminate}
+            terminating={terminating}
+          />
+          {showQuitModal && (
+            <QuitConfirmModal
+              onContinue={() => setShowQuitModal(false)}
+              onQuit={quitSession}
+            />
+          )}
+          {endPhrase && (
+            <SessionEndOverlay
+              phrase={endPhrase}
+              sessionId={endingSessionId}
+              onComplete={handleEndComplete}
+            />
+          )}
+          {recentBadges.length > 0 && (
+            <BadgeToast
+              badge={recentBadges[0]}
+              onDone={() => setRecentBadges(b => b.slice(1))}
+            />
+          )}
+          {completedBlock && (
+            <BlockCompleteModal
+              block={completedBlock}
+              onClose={() => { setCompletedBlock(null); play(soundBell); }}
+            />
+          )}
+        </>
+      );
+    }
+
+    // ÉTAT 1 — preview (par défaut)
     return (
       <>
         <PageWrap title={day.label} subtitle={`${day.fr} · Bloc ${block.id} · ${block.name} · Sem ${week}/${block.weeks[1]}`}>
@@ -2918,52 +3371,27 @@
             </Card>
           ) : (
             <>
-              {/* Toggle Mode Hyperfocus */}
-              <button type="button" onClick={() => setHyperfocus(h => !h)}
-                style={{
-                  marginTop: 10,
-                  width: '100%',
-                  background: hyperfocus ? 'var(--accent-royal)' : 'transparent',
-                  border: `1px solid ${hyperfocus ? 'var(--accent-royal)' : 'var(--border-strong)'}`,
-                  borderRadius: 10,
-                  color: hyperfocus ? '#0D0F0E' : 'var(--text-secondary)',
-                  padding: '8px 0',
-                  fontSize: 11,
-                  fontWeight: 700,
-                  letterSpacing: '1.5px',
-                  textTransform: 'uppercase',
-                  cursor: 'pointer',
-                }}>
-                {hyperfocus ? '◉ Sortir Hyperfocus' : '◎ Hyperfocus'}
-              </button>
-
-              {exos
-                .filter(ex => !hyperfocus || ex.exerciseSlot === openSlot)
-                .map(ex => (
-                <ExoCard
+              {/* Liste compacte lecture seule des exos du jour */}
+              {exos.map(ex => (
+                <SessionPreviewCard
                   key={ex.id}
                   ex={ex}
-                  week={week}
-                  sessionDay={day.sessionDay}
-                  sets={setsBySlot ? (setsBySlot[ex.exerciseSlot] || []) : null}
-                  isOpen={hyperfocus ? true : (openSlot === ex.exerciseSlot)}
-                  onToggle={() => setOpenSlot(openSlot === ex.exerciseSlot ? null : ex.exerciseSlot)}
-                  onSetValidated={refreshSets}
-                  onBadgesUnlocked={onBadgesUnlocked}
+                  setsCount={setsBySlot ? (setsBySlot[ex.exerciseSlot] || []).length : 0}
                 />
               ))}
 
-              {/* Bouton TERMINER — large, fond olympus or, fixe en bas du flow.
-                  Actif uniquement quand chaque exo a ≥1 set validé. */}
+              {/* Bouton DÉMARRER LA SÉANCE — primaire, large, olympus or.
+                  Désactivé si la session a déjà été terminée par le passé
+                  (l'utilisateur peut consulter les exos mais pas la rejouer). */}
               <button
                 type="button"
-                onClick={onTerminate}
-                disabled={!canTerminate || terminating}
+                onClick={startSession}
+                disabled={sessionCompleted}
                 style={{
                   width: '100%',
                   marginTop: 20,
-                  background: canTerminate ? 'var(--accent-olympus)' : 'var(--bg-surface-hover)',
-                  color: canTerminate ? '#0D0F0E' : 'var(--text-tertiary)',
+                  background: sessionCompleted ? 'var(--bg-surface-hover)' : 'var(--accent-olympus)',
+                  color: sessionCompleted ? 'var(--text-tertiary)' : '#0D0F0E',
                   border: 'none',
                   borderRadius: 14,
                   minHeight: 56,
@@ -2972,14 +3400,12 @@
                   fontWeight: 800,
                   letterSpacing: '2px',
                   textTransform: 'uppercase',
-                  cursor: canTerminate ? 'pointer' : 'not-allowed',
-                  opacity: terminating ? 0.6 : 1,
+                  cursor: sessionCompleted ? 'not-allowed' : 'pointer',
                 }}
               >
-                {terminating ? '…' : 'Terminer'}
+                {sessionCompleted ? 'Session terminée' : 'Démarrer la séance'}
               </button>
-
-              {!canTerminate && (
+              {sessionCompleted && (
                 <div style={{
                   marginTop: 8,
                   textAlign: 'center',
@@ -2987,7 +3413,7 @@
                   color: 'var(--text-tertiary)',
                   letterSpacing: '0.5px',
                 }}>
-                  Au moins 1 set validé sur chaque exo pour terminer.
+                  Cette session est déjà terminée pour aujourd'hui.
                 </div>
               )}
             </>
@@ -4420,6 +4846,26 @@
     });
 
     useEffect(() => {
+      // Auto-clear du flag sessionInProgress s'il est expiré (>6h depuis startedAt
+      // ou >2h depuis lastSetAt). Doit s'exécuter au boot avant que AujourdhuiPage
+      // ne tente une restauration. Si l'app s'ouvre sur une autre route, le flag
+      // expiré disparait quand même.
+      (async () => {
+        try {
+          const flag = await db.prefs.get('sessionInProgress');
+          if (flag?.value?.startedAt) {
+            const startedMs = new Date(flag.value.startedAt).getTime();
+            const lastSetMs = flag.value.lastSetAt ? new Date(flag.value.lastSetAt).getTime() : null;
+            const SIX_H = 6 * 3600 * 1000;
+            const TWO_H = 2 * 3600 * 1000;
+            const expired =
+              (Date.now() - startedMs > SIX_H) ||
+              (lastSetMs != null && Date.now() - lastSetMs > TWO_H);
+            if (expired) await db.prefs.delete('sessionInProgress');
+          }
+        } catch {}
+      })();
+
       seedIfEmpty().then(r => {
         if (r.ok && !r.skipped) setSeedTick(t => t + 1);
       });
