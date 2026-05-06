@@ -1868,16 +1868,28 @@
   };
 
   /* ==========================================================
-     StandardBar — progression vers un standard ATHX.
-     0-100%  → laurel (victoire mortelle en cours)
-     ≥100%   → olympus (divin, standard atteint)
-     Pas de blood : un point de départ n'est pas une régression.
+     StandardBar — différentiel kg + jauge 3 zones ATHX.
+     below    → text-secondary (pas encore au seuil)
+     in_range → laurel (dans la zone cible)
+     above    → olympus (divin, standard dépassé)
      ========================================================== */
   const StandardBar = ({ standard, bodyweight }) => {
-    const pct = Math.round(standard.progress * 100);
-    const color = standard.progress >= 1
-      ? 'var(--accent-olympus)'
-      : 'var(--accent-laurel)';
+    const currentKg = standard.bestE1RM || 0;
+    const hasBW = bodyweight > 0;
+    const hasE1RM = currentKg > 0;
+    const loKg = hasBW ? standard.startBW * bodyweight : 0;
+    const hiKg = hasBW ? standard.targetBW * bodyweight : 0;
+    const zone = !hasBW || !hasE1RM ? null
+      : currentKg < loKg ? 'below'
+      : currentKg > hiKg ? 'above'
+      : 'in_range';
+    const deltaToLo = loKg - currentKg;
+    const deltaToHi = hiKg - currentKg;
+    const scale = hiKg * 1.1;
+    const markerColor = zone === 'above' ? 'var(--accent-olympus)'
+      : zone === 'in_range' ? 'var(--accent-laurel)'
+      : 'var(--text-secondary)';
+
     return (
       <div style={{
         background: 'var(--bg-surface)',
@@ -1885,34 +1897,72 @@
         borderRadius: 12,
         padding: '12px 14px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6 }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>{standard.name}</div>
-          <div style={{ fontSize: 13, fontWeight: 800, color }}>{pct}%</div>
+          <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 8 }}>
+            {!hasBW ? (
+              <div style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--text-tertiary)' }}>Bodyweight non saisi</div>
+            ) : !hasE1RM ? (
+              <div style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--text-tertiary)' }}>1RM non saisi</div>
+            ) : zone === 'below' ? (
+              <>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-secondary)' }}>−{deltaToLo.toFixed(1)} kg</div>
+                <div style={{ fontSize: 10, fontWeight: 400, fontStyle: 'italic', color: 'var(--text-tertiary)', marginTop: 2 }}>pour seuil ATHX</div>
+              </>
+            ) : zone === 'in_range' ? (
+              <>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent-laurel)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Dans la zone ATHX</div>
+                <div style={{ fontSize: 10, fontWeight: 400, fontStyle: 'italic', color: 'var(--text-tertiary)', marginTop: 2 }}>+{deltaToHi.toFixed(1)} kg pour cible haute</div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent-olympus)' }}>+{(-deltaToHi).toFixed(1)} kg au-delà</div>
+                <div style={{ fontSize: 10, fontWeight: 400, fontStyle: 'italic', color: 'var(--text-tertiary)', marginTop: 2 }}>ATHX dépassé</div>
+              </>
+            )}
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8, fontSize: 11, color: 'var(--text-tertiary)' }}>
-          {bodyweight > 0 && standard.bestE1RM > 0 ? (
+          {hasBW && hasE1RM ? (
             <>
               <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{standard.ratioBW.toFixed(2)}× BW</span>
               <span>·</span>
               <span>{standard.startBW}× → {standard.targetBW}× BW</span>
             </>
           ) : (
-            <span>{standard.startBW}× → {standard.targetBW}× BW · {bodyweight > 0 ? 'pas de set tracké' : 'BW non défini'}</span>
+            <span>{standard.startBW}× → {standard.targetBW}× BW</span>
           )}
         </div>
-        <div style={{
-          height: 6,
-          background: 'var(--bg-primary)',
-          borderRadius: 3,
-          overflow: 'hidden',
-        }}>
+        {hasBW && hasE1RM && scale > 0 && (
           <div style={{
-            width: `${pct}%`,
-            height: '100%',
-            background: color,
-            transition: 'width var(--dur-normal) var(--ease-out), background var(--dur-normal) var(--ease-out)',
-          }} />
-        </div>
+            height: 6,
+            borderRadius: 3,
+            background: 'var(--bg-surface-hover)',
+            position: 'relative',
+            overflow: 'visible',
+          }}>
+            <div style={{
+              position: 'absolute',
+              left: `${(loKg / scale) * 100}%`,
+              width: `${((hiKg - loKg) / scale) * 100}%`,
+              height: '100%',
+              top: 0,
+              borderRadius: 3,
+              background: 'var(--accent-laurel)',
+              opacity: 0.15,
+            }} />
+            <div style={{
+              position: 'absolute',
+              left: `${(Math.min(currentKg, scale) / scale) * 100}%`,
+              width: 2,
+              height: 12,
+              top: -3,
+              transform: 'translateX(-1px)',
+              borderRadius: 1,
+              background: markerColor,
+            }} />
+          </div>
+        )}
       </div>
     );
   };
