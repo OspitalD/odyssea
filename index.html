@@ -1057,6 +1057,27 @@
     return best;
   };
 
+  // Hook : best e1RM des SETS LOGUÉS uniquement, pour cet exo (matching
+  // EXACT par exerciseName). Sémantique stricte "PR vient d'un set
+  // logué", utilisé pour la détection PR (preview + validate). Ne lit
+  // PAS db.oneRMs — sinon un déclaratif gonflé bloquerait la détection
+  // de PR sur les sets et propagerait l'effet dans Mètis / Áreté /
+  // useAllPRs / WeekStats / glyphe doré / lyre.
+  const useSetsBestE1RMFor = (exerciseName, refreshKey) => {
+    const [best, setBest] = useState(null);
+    useEffect(() => {
+      if (!exerciseName) return;
+      let alive = true;
+      db.sets.toArray().then(all => {
+        if (!alive) return;
+        const matches = all.filter(s => s.exerciseName === exerciseName && s.e1RM);
+        setBest(matches.length ? Math.max(...matches.map(s => s.e1RM)) : 0);
+      });
+      return () => { alive = false; };
+    }, [exerciseName, refreshKey]);
+    return best;
+  };
+
   // Hook : Standards ATHX avec overlay des 1RM déclarés (db.oneRMs).
   // Recalcule via computeStandards en passant la map { exerciseName →
   // e1RM déclaré le plus récent }. N'affecte PAS computeHeroStats ni les
@@ -2373,6 +2394,10 @@
     }, [isOpen]);
 
     const historicalBest = useBestE1RMFor(ex.exerciseName, sets?.length || 0);
+    // PR détection : sets logués uniquement (préserve Mètis / Áreté /
+    // useAllPRs / glyphe doré / lyre — un déclaratif gonflé ne doit pas
+    // bloquer la détection de PR).
+    const setsHistoricalBest = useSetsBestE1RMFor(ex.exerciseName, sets?.length || 0);
     const lastWeekBest = useLastWeekBest(ex.exerciseName, week);
     const timerMinutes = defaultTimerMinutes(ex.prescription || '');
     const [timerOpen, setTimerOpen] = useState(false);
@@ -2382,9 +2407,10 @@
     const sessionBest = bestE1RM(sets || []);
 
     const nextSetNumber = (sets?.length || 0) + 1;
-    // PR aperçu : preview > meilleur e1RM historique (TOUTES sessions confondues
-    // pour cet exo). Premier set ever : pas de PR (historicalBest = 0).
-    const isPreviewPR = historicalBest != null && historicalBest > 0 && previewE1RM > historicalBest;
+    // PR aperçu : preview > meilleur e1RM historique des SETS LOGUÉS
+    // (sets-only, pas de déclaratif). Premier set ever : pas de PR
+    // (setsHistoricalBest = 0).
+    const isPreviewPR = setsHistoricalBest != null && setsHistoricalBest > 0 && previewE1RM > setsHistoricalBest;
 
     // Flash visuel sur le bouton (cross-platform, marche sur iOS contrairement
     // à navigator.vibrate qui n'existe pas sur Safari/iOS PWA).
@@ -2393,7 +2419,7 @@
     const validate = async () => {
       if (weight <= 0 || reps <= 0) return;
       const e1RM = round05(epley(weight, reps));
-      const isPR = historicalBest != null && historicalBest > 0 && e1RM > historicalBest;
+      const isPR = setsHistoricalBest != null && setsHistoricalBest > 0 && e1RM > setsHistoricalBest;
       await db.sets.add({
         week,
         sessionDay,
