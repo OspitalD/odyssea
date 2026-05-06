@@ -553,22 +553,7 @@
     { slotIdx: 5, name: 'Box Jump 60cm',      format: 'JUMP', prescription: 'Jump for 10 min 3/min' },
   ];
 
-  // Infer slot format from prescription text when DB doesn't have it
-  const inferFormat = (prescription, name) => {
-    const p = (prescription || '').toLowerCase();
-    const n = (name || '').toLowerCase();
-    if (/\bRPE\b/i.test(prescription) || /\btop\s*set/i.test(prescription) || /backoff/i.test(p)) return 'TOP';
-    if (/double\s*prog/i.test(p) || /\bDBL\b/.test(prescription)) return 'DBL';
-    if (/emom/i.test(p) || /reps?\/min/i.test(p)) return 'EMOM';
-    if (/densit/i.test(p) || /amrap/i.test(p) || /max\s*sets/i.test(p)) return 'DENS';
-    if (/jump/i.test(p) || /jump/i.test(n) || /box\s*jump/i.test(n)) return 'JUMP';
-    if (/throw/i.test(p) || /throw/i.test(n) || /med\s*ball/i.test(n)) return 'THROW';
-    if (/sprint/i.test(p) || /sprint/i.test(n)) return 'SPRINT';
-    if (/\bMAP\b/.test(prescription) || /map/i.test(p)) return 'MAP';
-    // Fallback: look at set/rep patterns
-    if (/\d+\s*[x×]\s*\d+/.test(p)) return 'DBL';
-    return '';
-  };
+  const inferFormat = (prescription) => (FORMAT_META[detectFormat(prescription)] || FORMAT_META.traditional).label;
 
   const SEED_KPI = [
     { label: 'Volume Load', value: '12.4k', unit: 'kg', delta: '+8%', ref: 'vs S4',     accent: 'var(--accent-laurel)' },
@@ -720,6 +705,46 @@
   // Round à 0.5 (utile pour les steppers fractionnaires).
   const round05 = (x) => Math.round(x * 2) / 2;
 
+  const FORMAT_META = {
+    traditional: { label: 'TRAD', color: 'var(--text-secondary)' },
+    doubleProg:  { label: 'DBL PROG', color: 'var(--accent-laurel)' },
+    emom:        { label: 'EMOM', color: 'var(--accent-royal)' },
+    topBackoff:  { label: 'TOP+BO', color: 'var(--accent-olympus)' },
+    jump:        { label: 'JUMP', color: 'var(--accent-blood)' },
+  };
+
+  // Format detection — ordre de précédence strict, premier match gagne
+  function detectFormat(prescription) {
+    const p = (prescription || '').toLowerCase();
+    // 1. JUMP — patterns très spécifiques, collision faible
+    if (/\b(single effort|max jump|1 max effort|broad jump|vertical jump)\b/.test(p)) return 'jump';
+    // 2. EMOM / DENSITY — sans "for X min" (faux positif "rest for 2 min")
+    if (/\b(emom|every minute on the minute|density set)\b/.test(p)) return 'emom';
+    // 3. TOP SET + BACK-OFF
+    if (/\b(top set|work up to|1\s*set\s*to\s*failure)\b/.test(p) || /\d+\s*[x×]\s*\d+\s*@\s*rpe\s*\d+\s*then\s+\d+\s*[x×]\s*\d+/.test(p)) return 'topBackoff';
+    // Risque false positive sur tradi avec last set AMRAP — override manuel disponible
+    if (/\bamrap\b/.test(p)) return 'topBackoff';
+    // 4. DOUBLE PROG — double condition requise (range + mention)
+    if (/\d+\s*[-–]\s*\d+\s*reps?/.test(p) && /\b(double progression|rep range)\b/.test(p)) return 'doubleProg';
+    // 5. TRADITIONAL — fallback
+    return 'traditional';
+  }
+
+  function convertLbsToKg(text) {
+    if (!text) return text;
+    return text.replace(/(\d+\.?\d*)\s*(lbs?|pounds?)\b/gi, (_, num) => round05(parseFloat(num) * 0.4536) + ' kg');
+  }
+
+  function parseRepRange(prescription) {
+    const m = (prescription || '').match(/(\d+)\s*[-–]\s*(\d+)\s*reps?/i);
+    return m ? [parseInt(m[1], 10), parseInt(m[2], 10)] : null;
+  }
+
+  function parseDuration(prescription) {
+    const m = (prescription || '').match(/(\d+)\s*min/i);
+    return m ? parseInt(m[1], 10) : null;
+  }
+
   /* ==========================================================
      DATA LAYER — Dexie / IndexedDB (SPEC v5 §9)
      Schéma complet anticipé pour Phase 2 et 3 (évite migrations lourdes).
@@ -774,7 +799,7 @@
               exerciseSlot: ex.slot,
               exerciseName: ex.name || '',
               prescription: ex.prescription || '',
-              format: ex.format || inferFormat(ex.prescription, ex.name),
+              format: ex.format || detectFormat(ex.prescription),
             });
           }
         }
@@ -1029,7 +1054,11 @@
   // - Mètis   : ratio (sets PR) / (sessions completed) sur le sous-ensemble
   // - Áreté   : moyenne des 4 ci-dessus
   function computeAttributes(sets, sessions, bw, anchorWeek) {
-    const standards = computeStandards(sets, bw);
+    // EMOM et Jump exclus des calculs RPG
+    // TODO post-Block 1 : Bia devrait inclure les jumps via une métrique power dédiée, Pónos devrait inclure les EMOM
+    const rpgFormats = new Set([undefined, 'traditional', 'doubleProg', 'topBackoff']);
+    const rpgSets = sets.filter(s => rpgFormats.has(s.format));
+    const standards = computeStandards(rpgSets, bw);
 
     const sthenos = (() => {
       const main = standards.filter(s => ['squat', 'deadlift', 'bench', 'ohp'].includes(s.id));
@@ -1041,14 +1070,14 @@
 
     const ponos = (() => {
       const since = anchorWeek - 3;
-      const recent = sets.filter(s => s.week >= since && s.week <= anchorWeek && s.completedAt);
+      const recent = rpgSets.filter(s => s.week >= since && s.week <= anchorWeek && s.completedAt);
       const vl = recent.reduce((a, s) => a + (s.weight || 0) * (s.reps || 0), 0);
       // Baseline arbitraire pour normaliser : 80 000 kg sur 4 sem = "haut"
       return clamp01(vl / 80000);
     })();
 
     const completedSessions = sessions.filter(s => s.completedAt);
-    const prCount = sets.filter(s => s.isPR).length;
+    const prCount = rpgSets.filter(s => s.isPR).length;
     const metis = completedSessions.length > 0
       ? clamp01(prCount / completedSessions.length)
       : 0;
@@ -1217,9 +1246,24 @@
       let alive = true;
       db.sets.where('week').equals(currentWeek - 1).toArray().then(rows => {
         if (!alive) return;
-        const matches = rows.filter(s => s.exerciseName === exerciseName && s.e1RM);
+        const matches = rows.filter(s => s.exerciseName === exerciseName);
         if (!matches.length) { setState({ none: true }); return; }
-        setState(matches.reduce((m, s) => (s.e1RM > m.e1RM ? s : m), matches[0]));
+        const withE1RM = matches.filter(s => s.e1RM);
+        if (withE1RM.length) {
+          setState(withE1RM.reduce((m, s) => (s.e1RM > m.e1RM ? s : m), withE1RM[0]));
+          return;
+        }
+        const withJump = matches.filter(s => s.jumpHeight != null || s.jumpDistance != null);
+        if (withJump.length) {
+          const best = withJump.reduce((m, s) => {
+            const mVal = m.jumpHeight || m.jumpDistance || 0;
+            const sVal = s.jumpHeight || s.jumpDistance || 0;
+            return sVal > mVal ? s : m;
+          }, withJump[0]);
+          setState({ ...best, jumpAttempts: withJump.length });
+          return;
+        }
+        setState({ none: true });
       });
       return () => { alive = false; };
     }, [exerciseName, currentWeek]);
@@ -1308,6 +1352,31 @@
       return () => { alive = false; };
     }, [exerciseName, refreshKey]);
     return best;
+  };
+
+  const useFormatOverride = (week, sessionDay, exerciseSlot) => {
+    const key = `formatOverride_${week}_${sessionDay}_${exerciseSlot}`;
+    const [override, setOverride] = useState(null);
+    const [loaded, setLoaded] = useState(false);
+    useEffect(() => {
+      let alive = true;
+      db.prefs.get(key).then(row => {
+        if (!alive) return;
+        setOverride(row?.value?.format || null);
+        setLoaded(true);
+      }).catch(() => { if (alive) setLoaded(true); });
+      return () => { alive = false; };
+    }, [key]);
+    const setFormat = useCallback(async (fmt) => {
+      if (fmt) {
+        await db.prefs.put({ key, value: { format: fmt } });
+        setOverride(fmt);
+      } else {
+        try { await db.prefs.delete(key); } catch {}
+        setOverride(null);
+      }
+    }, [key]);
+    return [override, setFormat, loaded];
   };
 
   // Hook : Standards ATHX avec overlay des 1RM déclarés (db.oneRMs).
@@ -1841,9 +1910,10 @@
   // Stepper générique : boutons d'incrément/décrément autour d'une valeur
   // centrale. `steps` = liste de delta (ex: [-5, -2.5, +2.5, +5]).
   // Utilisé pour Weight et Reps (avec steps différents).
-  const Stepper = ({ value, onChange, steps, unit = '', min = 0, max = 9999, fontSize = 30 }) => {
+  const Stepper = ({ value, onChange, steps, unit = '', min = 0, max = 9999, fontSize = 30, roundFn }) => {
+    const round = roundFn || round05;
     const apply = (delta) => {
-      const next = Math.max(min, Math.min(max, round05((value || 0) + delta)));
+      const next = Math.max(min, Math.min(max, round((value || 0) + delta)));
       onChange(next);
     };
     const halfPoint = Math.floor(steps.length / 2);
@@ -2786,12 +2856,21 @@
   // ExoCard : 1 carte par exo, accordéon, saisie set complète.
   const ExoCard = ({ ex, week, sessionDay, sets, isOpen, onToggle, onSetValidated, onBadgesUnlocked }) => {
     const lastSet = sets && sets.length ? sets[sets.length - 1] : null;
-    // Pré-remplit weight/reps avec les valeurs du dernier set, ou défauts.
     const [weight, setWeight] = useState(() => lastSet?.weight ?? 0);
     const [reps, setReps] = useState(() => lastSet?.reps ?? 5);
     const [rir, setRir] = useState(() => lastSet?.rir ?? 2);
+    const [jumpHeight, setJumpHeight] = useState(0);
+    const [jumpDistance, setJumpDistance] = useState(0);
 
-    // À l'ouverture après une validation, refléter le dernier set saisi.
+    const [formatOverride, setFormatOverride] = useFormatOverride(week, sessionDay, ex.exerciseSlot);
+    const detectedFormat = detectFormat(ex.prescription);
+    const format = formatOverride || detectedFormat;
+    const fmtMeta = FORMAT_META[format] || FORMAT_META.traditional;
+    const isVerticalJump = format === 'jump' && !/\bbroad\b/i.test(ex.prescription || '');
+    const [showFormatDropdown, setShowFormatDropdown] = useState(false);
+    // Commit 1 : seuls traditional et jump sont implémentés — le reste fallback tradi
+    const effectiveFormat = format === 'jump' ? 'jump' : 'traditional';
+
     useEffect(() => {
       if (lastSet) {
         setWeight(lastSet.weight);
@@ -2800,8 +2879,6 @@
       }
     }, [lastSet?.id]);
 
-    // Bring active set entry into thumb reach when card expands.
-    // Mains chalkées + iPhone sur banc 50cm = pas le temps de scroller.
     const setEntryRef = React.useRef(null);
     useEffect(() => {
       if (!isOpen) return;
@@ -2812,86 +2889,184 @@
     }, [isOpen]);
 
     const historicalBest = useBestE1RMFor(ex.exerciseName, sets?.length || 0);
-    // PR détection : sets logués uniquement (préserve Mètis / Áreté /
-    // useAllPRs / glyphe doré / lyre — un déclaratif gonflé ne doit pas
-    // bloquer la détection de PR).
     const setsHistoricalBest = useSetsBestE1RMFor(ex.exerciseName, sets?.length || 0);
     const lastWeekBest = useLastWeekBest(ex.exerciseName, week);
-    const timerMinutes = defaultTimerMinutes(ex.prescription || '');
+    const timerMinutes = effectiveFormat !== 'jump' ? defaultTimerMinutes(ex.prescription || '') : null;
     const [timerOpen, setTimerOpen] = useState(false);
-    const previewE1RM = weight > 0 && reps > 0 ? round05(epley(weight, reps)) : 0;
-    const previewSI = weight > 0 && reps > 0 ? stressIndex(weight, reps, rir, historicalBest || previewE1RM) : 0;
+    const previewE1RM = effectiveFormat !== 'jump' && weight > 0 && reps > 0 ? round05(epley(weight, reps)) : 0;
+    const previewSI = effectiveFormat !== 'jump' && weight > 0 && reps > 0 ? stressIndex(weight, reps, rir, historicalBest || previewE1RM) : 0;
     const sessionVL = volumeLoad(sets || []);
     const sessionBest = bestE1RM(sets || []);
 
     const nextSetNumber = (sets?.length || 0) + 1;
-    // PR aperçu : preview > meilleur e1RM historique des SETS LOGUÉS
-    // (sets-only, pas de déclaratif). Premier set ever : pas de PR
-    // (setsHistoricalBest = 0).
-    const isPreviewPR = setsHistoricalBest != null && setsHistoricalBest > 0 && previewE1RM > setsHistoricalBest;
+    const isPreviewPR = effectiveFormat !== 'jump' && setsHistoricalBest != null && setsHistoricalBest > 0 && previewE1RM > setsHistoricalBest;
 
-    // Flash visuel sur le bouton (cross-platform, marche sur iOS contrairement
-    // à navigator.vibrate qui n'existe pas sur Safari/iOS PWA).
     const [flash, setFlash] = useState(false);
 
     const validate = async () => {
+      if (effectiveFormat === 'jump') {
+        const measurement = isVerticalJump ? jumpHeight : jumpDistance;
+        if (!measurement || measurement <= 0) return;
+        await db.sets.add({
+          week, sessionDay,
+          exerciseSlot: ex.exerciseSlot,
+          exerciseName: ex.exerciseName,
+          setNumber: nextSetNumber,
+          format: 'jump',
+          jumpHeight: isVerticalJump ? jumpHeight : null,
+          jumpDistance: !isVerticalJump ? jumpDistance : null,
+          weight: null, reps: null, rir: null, e1RM: null, isPR: false,
+          completedAt: new Date().toISOString(),
+          syncedAt: null,
+        });
+        try { navigator.vibrate && navigator.vibrate(20); } catch {}
+        checkBadges().then(newly => { if (newly.length) onBadgesUnlocked(newly); });
+        setFlash(true);
+        setTimeout(() => setFlash(false), 250);
+        onSetValidated();
+        return;
+      }
       if (weight <= 0 || reps <= 0) return;
       const e1RM = round05(epley(weight, reps));
       const isPR = setsHistoricalBest != null && setsHistoricalBest > 0 && e1RM > setsHistoricalBest;
       await db.sets.add({
-        week,
-        sessionDay,
+        week, sessionDay,
         exerciseSlot: ex.exerciseSlot,
         exerciseName: ex.exerciseName,
         setNumber: nextSetNumber,
-        weight, reps, rir,
-        e1RM,
-        isPR,
+        format: format || 'traditional',
+        weight, reps, rir, e1RM, isPR,
         completedAt: new Date().toISOString(),
         syncedAt: null,
       });
-      // Haptic Android (no-op silencieux sur iOS — la Web Vibration API n'y
-      // est pas implémentée par Apple).
       try { navigator.vibrate && navigator.vibrate(isPR ? [30, 50, 60] : 20); } catch {}
-      // PR e1RM (escalade Étape 10) : confetti + son lyre + toast (toast déjà
-      // câblé via la liste des sets et le flag isPR).
-      if (isPR) {
-        fireConfetti();
-        play(soundLyre);
-      }
-      // Check badges set-based (Atlas / Achille déclenchables ici)
+      if (isPR) { fireConfetti(); play(soundLyre); }
       checkBadges().then(newly => { if (newly.length) onBadgesUnlocked(newly); });
-      // Flash 250ms — feedback visuel garanti sur toute plateforme.
       setFlash(true);
       setTimeout(() => setFlash(false), 250);
       onSetValidated();
     };
 
-    return (
-      <Card style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
-        <button
-          type="button"
-          onClick={onToggle}
+    const renderSetBadge = (s) => {
+      if (s.format === 'jump') {
+        const val = s.jumpHeight != null ? `${s.jumpHeight} cm` : `${s.jumpDistance} m`;
+        return (
+          <li key={s.id} style={{
+            display: 'flex', alignItems: 'center', gap: 10, fontSize: 13,
+            padding: '8px 12px', background: 'var(--bg-primary)',
+            border: '1px solid var(--border-subtle)', borderRadius: 10,
+          }}>
+            <span style={{ color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 700, minWidth: 24 }}>#{s.setNumber}</span>
+            <span style={{ color: 'var(--accent-blood)', fontWeight: 700 }}>{val}</span>
+          </li>
+        );
+      }
+      return (
+        <li key={s.id} style={{
+          display: 'flex', alignItems: 'center', gap: 10, fontSize: 13,
+          padding: '8px 12px',
+          background: s.isPR ? 'rgba(232,160,32,0.08)' : 'var(--bg-primary)',
+          border: `1px solid ${s.isPR ? 'rgba(232,160,32,0.4)' : 'var(--border-subtle)'}`,
+          borderRadius: 10,
+        }}>
+          <span style={{ color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 700, minWidth: 24 }}>#{s.setNumber}</span>
+          <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{s.weight} kg</span>
+          <span style={{ color: 'var(--text-secondary)' }}>×{s.reps}</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>RIR {s.rir}</span>
+          <span style={{ flex: 1 }} />
+          {s.isPR && <span style={{ color: 'var(--accent-olympus)', fontSize: 13, fontWeight: 800 }} title="PR — nouvel e1RM record">★</span>}
+          <span style={{ color: s.isPR ? 'var(--accent-olympus)' : 'var(--accent-laurel)', fontSize: 11, fontWeight: 700 }}>e1RM {s.e1RM}</span>
+        </li>
+      );
+    };
+
+    const renderJumpInput = () => {
+      const measurement = isVerticalJump ? jumpHeight : jumpDistance;
+      const setMeasurement = isVerticalJump ? setJumpHeight : setJumpDistance;
+      const unit = isVerticalJump ? 'cm' : 'm';
+      const steps = isVerticalJump ? [-5, -1, +1, +5] : [-0.10, -0.05, +0.05, +0.10];
+      const max = isVerticalJump ? 100 : 4.00;
+      const roundBroad = (v) => Math.round(v * 20) / 20;
+      const attemptLabel = nextSetNumber <= 3
+        ? `Attempt ${nextSetNumber}/3`
+        : `Attempt ${nextSetNumber} · best of 3`;
+      return (
+        <div ref={setEntryRef}>
+          <div style={{ fontSize: 11, color: 'var(--accent-blood)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
+            {attemptLabel}
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>
+              {isVerticalJump ? 'Hauteur' : 'Distance'}
+            </div>
+            <Stepper value={measurement} onChange={setMeasurement} steps={steps} unit={unit} min={0} max={max} fontSize={32}
+              roundFn={isVerticalJump ? undefined : roundBroad} />
+          </div>
+          <button type="button" onClick={validate} disabled={measurement <= 0}
+            style={{
+              width: '100%',
+              background: flash ? 'var(--text-primary)' : (measurement > 0 ? 'var(--accent-blood)' : 'var(--bg-surface-hover)'),
+              color: flash ? '#0D0F0E' : (measurement > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
+              border: 'none', borderRadius: 12, minHeight: 56, padding: '18px 0',
+              fontSize: 14, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase',
+              cursor: measurement > 0 ? 'pointer' : 'not-allowed',
+              transform: flash ? 'scale(0.98)' : 'scale(1)',
+            }}>Valider attempt</button>
+        </div>
+      );
+    };
+
+    const renderTraditionalInput = () => (
+      <div ref={setEntryRef}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+            Set {nextSetNumber}
+          </div>
+          {previewE1RM > 0 && (
+            <div style={{ fontSize: 11, color: isPreviewPR ? 'var(--accent-olympus)' : 'var(--text-secondary)', fontWeight: 700 }}>
+              {isPreviewPR && '★ '}e1RM {previewE1RM} · SI {previewSI.toFixed(2)}
+            </div>
+          )}
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+          <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Reps</div>
+          <Stepper value={reps} onChange={setReps} steps={[-1, +1]} unit="" max={99} fontSize={24} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>RIR · reps en réserve</div>
+          <RirToggle value={rir} onChange={setRir} />
+        </div>
+        <button type="button" onClick={validate} disabled={weight <= 0 || reps <= 0}
           style={{
             width: '100%',
-            background: 'transparent',
-            border: 'none',
-            color: 'inherit',
-            textAlign: 'left',
-            padding: '14px 16px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'baseline',
-            justifyContent: 'space-between',
-            gap: 12,
-          }}
-        >
+            background: flash ? 'var(--text-primary)' : (weight > 0 && reps > 0 ? 'var(--accent-laurel)' : 'var(--bg-surface-hover)'),
+            color: flash ? '#0D0F0E' : (weight > 0 && reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
+            border: 'none', borderRadius: 12, minHeight: 56, padding: '18px 0',
+            fontSize: 14, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase',
+            cursor: weight > 0 && reps > 0 ? 'pointer' : 'not-allowed',
+            transform: flash ? 'scale(0.98)' : 'scale(1)',
+          }}>Valider set</button>
+      </div>
+    );
+
+    return (
+      <Card style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
+        <button type="button" onClick={onToggle}
+          style={{
+            width: '100%', background: 'transparent', border: 'none', color: 'inherit',
+            textAlign: 'left', padding: '14px 16px', cursor: 'pointer',
+            display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12,
+          }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
               Slot {ex.exerciseSlot}{sets && sets.length > 0 && ` · ${sets.length} set${sets.length > 1 ? 's' : ''}`}
             </div>
-            <div style={{ fontSize: 17, fontWeight: 800, color: 'var(--text-primary)', marginTop: 2 }}>
-              {ex.exerciseName}
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 2 }}>
+              <span style={{ fontSize: 17, fontWeight: 800, color: 'var(--text-primary)' }}>{ex.exerciseName}</span>
             </div>
           </div>
           <span style={{ fontSize: 16, color: 'var(--text-secondary)', flex: '0 0 auto' }}>
@@ -2901,37 +3076,68 @@
 
         {isOpen && (
           <div style={{ padding: '0 16px 16px' }}>
+            {/* Mini-tag format + override dropdown */}
+            <div style={{ position: 'relative', marginBottom: 10 }}>
+              <button type="button" onClick={() => setShowFormatDropdown(v => !v)}
+                style={{
+                  background: 'transparent', border: `1px solid ${fmtMeta.color}`, borderRadius: 6,
+                  color: fmtMeta.color, fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-mono, monospace)',
+                  letterSpacing: '0.08em', textTransform: 'uppercase', padding: '2px 8px', cursor: 'pointer',
+                }}>
+                {fmtMeta.label}{formatOverride ? ' ✎' : ''}
+              </button>
+              {showFormatDropdown && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 20,
+                  background: 'var(--bg-surface)', border: '1px solid var(--border-strong)',
+                  borderRadius: 10, padding: 4, minWidth: 160,
+                }}>
+                  {Object.entries(FORMAT_META).map(([key, meta]) => (
+                    <button key={key} type="button"
+                      onClick={() => { setFormatOverride(key === detectedFormat ? null : key); setShowFormatDropdown(false); }}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left',
+                        background: key === format ? 'var(--bg-surface-hover)' : 'transparent',
+                        border: 'none', borderRadius: 6, color: meta.color, fontSize: 12,
+                        fontWeight: 700, padding: '10px 12px', cursor: 'pointer',
+                        fontFamily: 'var(--font-mono, monospace)',
+                      }}>
+                      {meta.label}{key === detectedFormat ? ' (auto)' : ''}{key === format ? ' ✓' : ''}
+                    </button>
+                  ))}
+                  {formatOverride && (
+                    <button type="button"
+                      onClick={() => { setFormatOverride(null); setShowFormatDropdown(false); }}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left',
+                        background: 'transparent', border: 'none', borderRadius: 6,
+                        color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 700,
+                        padding: '10px 12px', cursor: 'pointer',
+                        borderTop: '1px solid var(--border-subtle)', marginTop: 2,
+                      }}>Réinitialiser détection auto</button>
+                  )}
+                </div>
+              )}
+            </div>
+
             {ex.prescription && (
               <div style={{
-                fontSize: 12,
-                color: 'var(--text-secondary)',
-                whiteSpace: 'pre-line',
-                lineHeight: 1.55,
-                background: 'var(--bg-primary)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 10,
-                padding: '10px 12px',
-                marginBottom: 12,
-              }}>{ex.prescription}</div>
+                fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'pre-line', lineHeight: 1.55,
+                background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
+                borderRadius: 10, padding: '10px 12px', marginBottom: 12,
+              }}>{convertLbsToKg(ex.prescription)}</div>
             )}
 
-            {/* Timer intégré — uniquement si l'exo matche density set / jump */}
-            {timerMinutes !== null && (
+            {timerMinutes !== null && effectiveFormat !== 'jump' && (
               <div style={{ marginBottom: 12 }}>
                 {!timerOpen ? (
                   <button type="button" onClick={() => setTimerOpen(true)}
                     style={{
-                      width: '100%',
-                      background: 'transparent',
-                      border: '1px dashed var(--accent-olympus)',
-                      borderRadius: 10,
-                      color: 'var(--accent-olympus)',
-                      padding: '10px 12px',
-                      fontSize: 12,
-                      fontWeight: 700,
-                      letterSpacing: '1.2px',
-                      textTransform: 'uppercase',
-                      cursor: 'pointer',
+                      width: '100%', background: 'transparent',
+                      border: '1px dashed var(--accent-olympus)', borderRadius: 10,
+                      color: 'var(--accent-olympus)', padding: '10px 12px',
+                      fontSize: 12, fontWeight: 700, letterSpacing: '1.2px',
+                      textTransform: 'uppercase', cursor: 'pointer',
                     }}>⏱ Démarrer timer · {timerMinutes} min</button>
                 ) : (
                   <Timer durationMin={timerMinutes} onClose={() => setTimerOpen(false)} />
@@ -2939,40 +3145,39 @@
               </div>
             )}
 
-            {/* Bandeau Sem -1 — apparaît dès la S2 si historique dispo */}
+            {/* Sem -1 — format-aware */}
             {lastWeekBest && !lastWeekBest.none && (
               <div style={{
-                fontSize: 12,
-                color: 'var(--text-secondary)',
-                background: 'var(--bg-primary)',
-                border: '1px solid var(--border-subtle)',
-                borderLeft: '3px solid var(--accent-royal)',
-                borderRadius: 10,
-                padding: '8px 12px',
-                marginBottom: 12,
-                display: 'flex',
-                alignItems: 'baseline',
-                gap: 8,
+                fontSize: 12, color: 'var(--text-secondary)', background: 'var(--bg-primary)',
+                border: '1px solid var(--border-subtle)', borderLeft: '3px solid var(--accent-royal)',
+                borderRadius: 10, padding: '8px 12px', marginBottom: 12,
+                display: 'flex', alignItems: 'baseline', gap: 8,
               }}>
                 <span style={{ color: 'var(--accent-royal)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '1.2px', fontWeight: 700 }}>Sem −1</span>
-                <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{lastWeekBest.weight} kg</span>
-                <span>×{lastWeekBest.reps}</span>
-                <span style={{ fontSize: 11 }}>RIR {lastWeekBest.rir}</span>
-                <span style={{ flex: 1 }} />
-                <span style={{ color: 'var(--accent-laurel)', fontSize: 11, fontWeight: 700 }}>e1RM {lastWeekBest.e1RM}</span>
+                {(lastWeekBest.jumpHeight != null || lastWeekBest.jumpDistance != null) ? (
+                  <>
+                    <span style={{ color: 'var(--accent-blood)', fontWeight: 700 }}>
+                      {lastWeekBest.jumpHeight != null ? `${lastWeekBest.jumpHeight} cm` : `${lastWeekBest.jumpDistance} m`}
+                    </span>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>best of {lastWeekBest.jumpAttempts || '?'}</span>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{lastWeekBest.weight} kg</span>
+                    <span>×{lastWeekBest.reps}</span>
+                    <span style={{ fontSize: 11 }}>RIR {lastWeekBest.rir}</span>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ color: 'var(--accent-laurel)', fontSize: 11, fontWeight: 700 }}>e1RM {lastWeekBest.e1RM}</span>
+                  </>
+                )}
               </div>
             )}
 
-            {/* Bandeau live e1RM + Volume Load (mis à jour à chaque set validé) */}
-            {sets && sets.length > 0 && (
+            {effectiveFormat !== 'jump' && sets && sets.length > 0 && (
               <div style={{
-                display: 'flex',
-                gap: 12,
-                fontSize: 12,
-                color: 'var(--text-secondary)',
-                marginBottom: 12,
-                paddingBottom: 12,
-                borderBottom: '1px solid var(--border-subtle)',
+                display: 'flex', gap: 12, fontSize: 12, color: 'var(--text-secondary)',
+                marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border-subtle)',
               }}>
                 <div>
                   <span style={{ color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1px', fontSize: 10, fontWeight: 700 }}>e1RM session </span>
@@ -2985,103 +3190,13 @@
               </div>
             )}
 
-            {/* Liste des sets validés (badges) */}
             {sets && sets.length > 0 && (
               <ul style={{ margin: '0 0 14px', padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {sets.map(s => {
-                  return (
-                    <li key={s.id} style={{
-                      display: 'flex', alignItems: 'center', gap: 10,
-                      fontSize: 13,
-                      padding: '8px 12px',
-                      background: s.isPR ? 'rgba(232,160,32,0.08)' : 'var(--bg-primary)',
-                      border: `1px solid ${s.isPR ? 'rgba(232,160,32,0.4)' : 'var(--border-subtle)'}`,
-                      borderRadius: 10,
-                    }}>
-                      <span style={{ color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 700, minWidth: 24 }}>#{s.setNumber}</span>
-                      <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{s.weight} kg</span>
-                      <span style={{ color: 'var(--text-secondary)' }}>×{s.reps}</span>
-                      <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>RIR {s.rir}</span>
-                      <span style={{ flex: 1 }} />
-                      {s.isPR && (
-                        <span style={{ color: 'var(--accent-olympus)', fontSize: 13, fontWeight: 800 }} title="PR — nouvel e1RM record">★</span>
-                      )}
-                      <span style={{ color: s.isPR ? 'var(--accent-olympus)' : 'var(--accent-laurel)', fontSize: 11, fontWeight: 700 }}>e1RM {s.e1RM}</span>
-                    </li>
-                  );
-                })}
+                {sets.map(renderSetBadge)}
               </ul>
             )}
 
-            {/* Carte saisie du set en cours */}
-            <div ref={setEntryRef}>
-              <div style={{
-                display: 'flex',
-                alignItems: 'baseline',
-                justifyContent: 'space-between',
-                marginBottom: 10,
-              }}>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
-                  Set {nextSetNumber}
-                </div>
-                {previewE1RM > 0 && (
-                  <div style={{ fontSize: 11, color: isPreviewPR ? 'var(--accent-olympus)' : 'var(--text-secondary)', fontWeight: 700 }}>
-                    {isPreviewPR && '★ '}e1RM {previewE1RM} · SI {previewSI.toFixed(2)}
-                  </div>
-                )}
-              </div>
-
-              {/* Stepper Weight */}
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>
-                  Weight
-                </div>
-                <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
-              </div>
-
-              {/* Stepper Reps */}
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>
-                  Reps
-                </div>
-                <Stepper value={reps} onChange={setReps} steps={[-1, +1]} unit="" max={99} fontSize={24} />
-              </div>
-
-              {/* RIR */}
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>
-                  RIR · reps en réserve
-                </div>
-                <RirToggle value={rir} onChange={setRir} />
-              </div>
-
-              {/* Bouton validation. Flash 250ms après tap = feedback cross-plateforme
-                  (la vibration ne marche que sur Android). */}
-              <button
-                type="button"
-                onClick={validate}
-                disabled={weight <= 0 || reps <= 0}
-                style={{
-                  width: '100%',
-                  background: flash
-                    ? 'var(--text-primary)'
-                    : (weight > 0 && reps > 0 ? 'var(--accent-laurel)' : 'var(--bg-surface-hover)'),
-                  color: flash
-                    ? '#0D0F0E'
-                    : (weight > 0 && reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
-                  border: 'none',
-                  borderRadius: 12,
-                  minHeight: 56,
-                  padding: '18px 0',
-                  fontSize: 14,
-                  fontWeight: 800,
-                  letterSpacing: '1.5px',
-                  textTransform: 'uppercase',
-                  cursor: weight > 0 && reps > 0 ? 'pointer' : 'not-allowed',
-                  transform: flash ? 'scale(0.98)' : 'scale(1)',
-                }}
-              >Valider set</button>
-            </div>
+            {effectiveFormat === 'jump' ? renderJumpInput() : renderTraditionalInput()}
           </div>
         )}
       </Card>
@@ -3710,14 +3825,17 @@
 
           {/* Slot list — tap to expand consignes */}
           {(() => {
-            const FORMAT_COLORS = {
-              TOP: 'var(--accent-olympus)', DBL: 'var(--accent-laurel)', EMOM: 'var(--accent-royal)',
-              DENS: 'var(--text-secondary)', JUMP: 'var(--accent-blood)', THROW: 'var(--accent-blood)',
-              SPRINT: 'var(--accent-blood)', MAP: 'var(--accent-royal)',
-            };
             const slots = (exos && exos.length > 0)
-              ? exos.map(ex => ({ idx: ex.exerciseSlot, name: ex.exerciseName, format: ex.format || inferFormat(ex.prescription, ex.exerciseName), prescription: ex.prescription || '' }))
-              : (!day.strength ? [] : SEED_SLOTS_LUN.map(s => ({ idx: s.slotIdx, name: s.name, format: s.format, prescription: s.prescription })));
+              ? exos.map(ex => {
+                  const fmt = detectFormat(ex.prescription);
+                  const meta = FORMAT_META[fmt] || FORMAT_META.traditional;
+                  return { idx: ex.exerciseSlot, name: ex.exerciseName, formatLabel: meta.label, formatColor: meta.color, prescription: ex.prescription || '' };
+                })
+              : (!day.strength ? [] : SEED_SLOTS_LUN.map(s => {
+                  const fmt = detectFormat(s.prescription);
+                  const meta = FORMAT_META[fmt] || FORMAT_META.traditional;
+                  return { idx: s.slotIdx, name: s.name, formatLabel: meta.label, formatColor: meta.color, prescription: s.prescription };
+                }));
 
             if (!day.strength) return (
               <div style={{ padding: 'var(--sp-5)', textAlign: 'center', color: 'var(--text-tertiary)', border: '1px dashed var(--border-subtle)', borderRadius: 'var(--r-md)' }}>
@@ -3734,7 +3852,7 @@
                 <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
                   {slots.map(slot => {
                     const isOpen = expandedSlot === slot.idx;
-                    const fmtColor = FORMAT_COLORS[slot.format] || 'var(--text-secondary)';
+                    const fmtColor = slot.formatColor;
                     return (
                       <div key={slot.idx}>
                         <button type="button" onClick={() => setExpandedSlot(isOpen ? null : slot.idx)}
@@ -3750,12 +3868,12 @@
                           <span style={{ flex: 1, textAlign: 'left', fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-sans)' }}>
                             {slot.name}
                           </span>
-                          {slot.format && (
+                          {slot.formatLabel && (
                             <span style={{
                               padding: '3px 10px', border: `1px solid ${fmtColor}`, borderRadius: 'var(--r-sm)',
                               fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-mono)',
                               color: fmtColor, letterSpacing: '0.08em', textTransform: 'uppercase',
-                            }}>{slot.format}</span>
+                            }}>{slot.formatLabel}</span>
                           )}
                         </button>
                         {isOpen && slot.prescription && (
@@ -3902,15 +4020,35 @@
     const programmeByDay = useWeekProgramme(week, useSeedTick());
     const todayIdx = getCurrentWeekDayIdx();
     const navigate = useNavigate();
-    const [selectedIdx, setSelectedIdx] = useState(todayIdx || 5);
 
+    // Uses FORMAT_META from top-level for consistent label/color mapping
+
+    // Build training days from WEEK_DAYS + real programme data
+    const trainingDays = WEEK_DAYS.filter(d => d.strength && d.sessionDay).map(d => {
+      const exos = (programmeByDay && programmeByDay[d.sessionDay]) || [];
+      const isToday = d.idx === todayIdx;
+      const isPast = todayIdx === 0 ? d.idx < 7 : d.idx < todayIdx;
+      return { ...d, exos, isToday, isPast };
+    });
+
+    // Progression opportunities — lifts present this week that have ATHX targets
+    const weekExoNames = trainingDays.flatMap(d => d.exos.map(ex => ex.exerciseName));
+    const progressionOpps = SEED_ATHX_STANDARDS.map(std => {
+      const athx = ATHX_STANDARDS.find(a => a.id === std.lift);
+      if (!athx) return null;
+      const hasLift = weekExoNames.some(n => athx.pattern.test(n));
+      if (!hasLift) return null;
+      const gap = std.target - std.current;
+      const weekTarget = Math.min(2.5, gap);
+      return { ...std, gap, weekTarget, liftName: athx.name };
+    }).filter(Boolean);
+
+    // Stats highlights from seed
     const sessions = SEED_SESSIONS_S5;
-    const sel = sessions[selectedIdx - 1] || sessions[4];
-    const maxVol = Math.max(...sessions.filter(s => s.volume).map(s => s.volume), 1);
-
-    // SVG bar chart dimensions
-    const svgW = 360, svgH = 200, barW = 28, gap = (svgW - 7 * barW) / 8;
-    const chartTop = 40, chartBot = svgH - 30, chartH = chartBot - chartTop;
+    const doneSessions = sessions.filter(s => s.status === 'done');
+    const totalVol = doneSessions.reduce((a, s) => a + (s.volume || 0), 0);
+    const totalPR = doneSessions.reduce((a, s) => a + (s.prMarks || 0), 0);
+    const totalSessions = sessions.filter(s => s.kind).length;
 
     return (
       <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
@@ -3927,173 +4065,120 @@
           </div>
         </div>
 
-        {/* Console Oraculaire — SVG 7-column graph */}
-        <div className="ody-tablet" style={{ padding: 'var(--sp-3) var(--sp-2)', marginBottom: 'var(--sp-4)' }}>
-          <svg width="100%" viewBox={`0 0 ${svgW} ${svgH}`} style={{ display: 'block' }}>
-            {/* Horizontal rails */}
-            {[0, 0.25, 0.5, 0.75, 1].map(pct => {
-              const y = chartBot - pct * chartH;
-              return <line key={pct} x1={gap} y1={y} x2={svgW - gap} y2={y}
-                stroke="var(--border-subtle)" strokeWidth="0.5" strokeDasharray="3 3" />;
-            })}
-
-            {sessions.map((s, i) => {
-              const x = gap + i * (barW + gap);
-              const isSelected = i + 1 === selectedIdx;
-              const isToday = s.status === 'today';
-              const isDone = s.status === 'done';
-              const isRest = s.status === 'rest';
-              const isUpcoming = s.status === 'upcoming';
-              const barH = isDone && s.volume ? (s.volume / maxVol) * chartH * 0.85 : 0;
-              const barY = chartBot - barH;
-
-              return (
-                <g key={s.id} onClick={() => setSelectedIdx(i + 1)} style={{ cursor: 'pointer' }}>
-                  {/* Selection brackets */}
-                  {isSelected && (
-                    <>
-                      <line x1={x - 2} y1={chartTop - 8} x2={x + 4} y2={chartTop - 8} stroke="var(--accent-olympus)" strokeWidth="2" />
-                      <line x1={x - 2} y1={chartTop - 8} x2={x - 2} y2={chartTop - 2} stroke="var(--accent-olympus)" strokeWidth="2" />
-                      <line x1={x + barW + 2} y1={chartTop - 8} x2={x + barW - 4} y2={chartTop - 8} stroke="var(--accent-olympus)" strokeWidth="2" />
-                      <line x1={x + barW + 2} y1={chartTop - 8} x2={x + barW + 2} y2={chartTop - 2} stroke="var(--accent-olympus)" strokeWidth="2" />
-                    </>
-                  )}
-                  {/* Glyph crown above */}
-                  {s.glyph && (
-                    <text x={x + barW / 2} y={chartTop + 2} textAnchor="middle" fontSize="11"
-                      fontFamily="var(--font-greek)" fontStyle="italic"
-                      fill={isDone ? 'var(--accent-laurel)' : isToday ? 'var(--accent-olympus)' : 'var(--text-tertiary)'}>
-                      {s.glyph}
-                    </text>
-                  )}
-                  {/* Volume label on top of done bars */}
-                  {isDone && s.volume && (
-                    <text x={x + barW / 2} y={barY - 6} textAnchor="middle" fontSize="9"
-                      fontFamily="var(--font-mono)" fill="var(--text-secondary)" fontWeight="500">
-                      {(s.volume / 1000).toFixed(1)}k
-                    </text>
-                  )}
-                  {/* Bar body */}
-                  {isDone && barH > 0 && (
-                    <rect x={x} y={barY} width={barW} height={barH} rx="2"
-                      fill="var(--accent-laurel)" opacity="0.85" />
-                  )}
-                  {isToday && (
-                    <>
-                      <rect x={x} y={chartBot - chartH * 0.35} width={barW} height={chartH * 0.35} rx="2"
-                        fill="var(--accent-olympus)" opacity="0.12"
-                        stroke="var(--accent-olympus)" strokeWidth="1" strokeDasharray="3 2" />
-                      <polygon
-                        points={`${x + barW / 2},${chartBot - chartH * 0.35 - 6} ${x + barW / 2 - 4},${chartBot - chartH * 0.35 + 2} ${x + barW / 2 + 4},${chartBot - chartH * 0.35 + 2}`}
-                        fill="var(--accent-olympus)" />
-                    </>
-                  )}
-                  {isUpcoming && (
-                    <rect x={x} y={chartBot - chartH * 0.25} width={barW} height={chartH * 0.25} rx="2"
-                      fill="none" stroke="var(--text-tertiary)" strokeWidth="0.8" strokeDasharray="3 2" />
-                  )}
-                  {isRest && (
-                    <circle cx={x + barW / 2} cy={chartBot - 2} r="2" fill="var(--text-quaternary)" />
-                  )}
-                  {/* PR star on done days with PR */}
-                  {isDone && s.prMarks > 0 && (
-                    <text x={x + barW / 2} y={barY - 18} textAnchor="middle" dominantBaseline="middle"
-                      fontSize="14" fill="var(--accent-olympus)" fontWeight="800">★</text>
-                  )}
-                  {/* Day label */}
-                  <text x={x + barW / 2} y={svgH - 6} textAnchor="middle" fontSize="10"
-                    fontFamily="var(--font-mono)" fontWeight={isSelected ? '700' : '500'}
-                    fill={isSelected ? 'var(--accent-olympus)' : isToday ? 'var(--text-primary)' : 'var(--text-tertiary)'}
-                    textDecoration={isSelected ? 'underline' : 'none'}>
-                    {DAY_LABELS[i + 1]}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-        </div>
-
-        {/* JourPreviewCard */}
-        <div className="ody-tablet" style={{
-          padding: 'var(--sp-4) var(--sp-5)',
-          borderColor: sel.status === 'done' ? 'rgba(62,207,160,0.3)' :
-                        sel.status === 'today' ? 'rgba(232,160,32,0.3)' :
-                        sel.status === 'rest' ? 'var(--border-subtle)' : 'var(--border-strong)',
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--sp-3)' }}>
-            <div>
-              <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>
-                {DAY_LABELS[selectedIdx]} · S{week}
-              </Inscription>
-              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', marginTop: 2 }}>
-                {sel.kind || 'Repos'}
-              </div>
+        {/* Stats highlights row */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 'var(--sp-3)', marginBottom: 'var(--sp-4)' }}>
+          <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+            <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent-laurel)' }}>
+              {totalVol ? `${(totalVol / 1000).toFixed(1)}k` : '—'}
             </div>
-            <span style={{
-              fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em',
-              padding: '3px 8px', borderRadius: 'var(--r-sm)',
-              background: sel.status === 'done' ? 'rgba(62,207,160,0.12)' :
-                          sel.status === 'today' ? 'rgba(232,160,32,0.12)' : 'transparent',
-              color: sel.status === 'done' ? 'var(--accent-laurel)' :
-                     sel.status === 'today' ? 'var(--accent-olympus)' : 'var(--text-tertiary)',
-              border: sel.status === 'rest' ? '1px dashed var(--text-tertiary)' : 'none',
-            }}>
-              {sel.status === 'done' ? 'Terminée' : sel.status === 'today' ? 'Aujourd\'hui' :
-               sel.status === 'rest' ? 'Repos' : 'À venir'}
-            </span>
+            <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>VOLUME</Inscription>
           </div>
-
-          {sel.status !== 'rest' && (
-            <div style={{ display: 'flex', gap: 'var(--sp-4)', marginBottom: 'var(--sp-4)' }}>
-              <div>
-                <Inscription size="xs">Volume</Inscription>
-                <div className="ody-tactical" style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>
-                  {sel.volume ? `${(sel.volume / 1000).toFixed(1)}k` : '—'}
-                </div>
-              </div>
-              <div>
-                <Inscription size="xs">Durée</Inscription>
-                <div className="ody-tactical" style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>
-                  {sel.duration ? `${sel.duration}'` : '—'}
-                </div>
-              </div>
-              <div>
-                <Inscription size="xs">PR</Inscription>
-                <div className="ody-tactical" style={{ fontSize: 18, fontWeight: 700, marginTop: 2, color: sel.prMarks > 0 ? 'var(--accent-olympus)' : 'var(--text-primary)' }}>
-                  {sel.prMarks || '—'}
-                </div>
-              </div>
+          <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+            <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800 }}>
+              {doneSessions.length}/{totalSessions}
             </div>
-          )}
-
-          {sel.status === 'rest' ? (
-            <div style={{
-              textAlign: 'center', padding: 'var(--sp-4)',
-              border: '1px dashed var(--border-subtle)', borderRadius: 'var(--r-md)',
-              color: 'var(--text-tertiary)', fontSize: 13,
-            }}>
-              REPOS · JOUR LIBRE
+            <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>SESSIONS</Inscription>
+          </div>
+          <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+            <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800, color: totalPR > 0 ? 'var(--accent-olympus)' : 'var(--text-primary)' }}>
+              {totalPR > 0 ? `${totalPR} ★` : '—'}
             </div>
-          ) : sel.status === 'today' ? (
-            <button type="button" className="ody-btn-primary" style={{ width: '100%' }}
-              onClick={() => navigate(`${ROUTES.AUJOURDHUI}?day=${WEEK_DAYS.find(d => d.idx === selectedIdx)?.sessionDay || ''}`)}>
-              DÉMARRER
-            </button>
-          ) : sel.status === 'done' ? (
-            <button type="button" className="ody-btn-secondary" style={{ width: '100%' }}
-              onClick={() => navigate(`${ROUTES.AUJOURDHUI}?day=${WEEK_DAYS.find(d => d.idx === selectedIdx)?.sessionDay || ''}`)}>
-              REVOIR LA SÉANCE
-            </button>
-          ) : (
-            <button type="button" className="ody-btn-secondary" style={{ width: '100%' }}
-              onClick={() => navigate(`${ROUTES.AUJOURDHUI}?day=${WEEK_DAYS.find(d => d.idx === selectedIdx)?.sessionDay || ''}`)}>
-              VOIR LA SÉANCE
-            </button>
-          )}
+            <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>PR</Inscription>
+          </div>
         </div>
+
+        {/* Programme — each training day card */}
+        <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block' }}>
+          PROGRAMME · {trainingDays.length} SESSIONS
+        </Inscription>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', marginBottom: 'var(--sp-4)' }}>
+          {trainingDays.map(d => {
+            const accent = d.isToday ? 'var(--accent-olympus)' : d.isPast ? 'var(--accent-laurel)' : 'var(--text-secondary)';
+            return (
+              <button key={d.idx} type="button"
+                onClick={() => navigate(`${ROUTES.AUJOURDHUI}?day=${d.sessionDay}`)}
+                className="ody-tablet" style={{
+                  padding: 'var(--sp-3) var(--sp-4)', cursor: 'pointer', textAlign: 'left',
+                  background: 'transparent', width: '100%',
+                  borderColor: d.isToday ? 'rgba(232,160,32,0.3)' : d.isPast ? 'rgba(62,207,160,0.15)' : 'var(--border-subtle)',
+                }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: d.exos.length ? 8 : 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+                    <span style={{
+                      fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700,
+                      color: accent, letterSpacing: '0.1em', minWidth: 28,
+                    }}>{DAY_LABELS[d.idx]}</span>
+                    <span style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-primary)' }}>{d.label}</span>
+                  </div>
+                  {d.isToday && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--accent-olympus)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Aujourd'hui</span>}
+                  {d.isPast && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--accent-laurel)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Done</span>}
+                </div>
+                {d.exos.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', paddingLeft: 40 }}>
+                    {d.exos.map(ex => {
+                      const fmtId = detectFormat(ex.prescription);
+                      const fmtInfo = FORMAT_META[fmtId] || FORMAT_META.traditional;
+                      return (
+                        <span key={ex.id || ex.exerciseSlot} style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          {ex.exerciseName}
+                          {fmtInfo.label && <span style={{
+                            fontSize: 8, fontWeight: 700, fontFamily: 'var(--font-mono)',
+                            color: fmtInfo.color, opacity: 0.7, letterSpacing: '0.05em',
+                          }}>{fmtInfo.label}</span>}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Objectifs — progression opportunities */}
+        {progressionOpps.length > 0 && (
+          <>
+            <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block' }}>
+              OBJECTIFS · PROGRESSION
+            </Inscription>
+            <div className="ody-tablet" style={{ padding: 'var(--sp-4)', marginBottom: 'var(--sp-4)' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>
+                {progressionOpps.map(opp => {
+                  const pct = Math.min(1, opp.current / opp.target);
+                  const isClose = pct >= 0.9;
+                  return (
+                    <div key={opp.lift}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{opp.liftName}</span>
+                        <span className="ody-tactical" style={{
+                          fontSize: 11, fontWeight: 700,
+                          color: isClose ? 'var(--accent-olympus)' : 'var(--accent-laurel)',
+                        }}>
+                          {opp.current} → {opp.target}kg
+                        </span>
+                      </div>
+                      <div style={{ height: 4, background: 'var(--bg-surface)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
+                        <div style={{
+                          width: `${pct * 100}%`, height: '100%', borderRadius: 2,
+                          background: isClose ? 'var(--accent-olympus)' : 'var(--accent-laurel)',
+                        }} />
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                        {isClose
+                          ? `A ${opp.gap}kg du standard ATHX — vise +${opp.weekTarget}kg`
+                          : `Vise +${opp.weekTarget}kg · ratio ${opp.ratio.toFixed(2)}x → ${opp.targetRatio.toFixed(1)}x`
+                        }
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Distribution attributs */}
-        <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)', marginTop: 'var(--sp-4)' }}>
+        <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)' }}>
           <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block' }}>
             DISTRIBUTION ATTRIBUTS · S{week}
           </Inscription>
