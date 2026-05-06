@@ -10,10 +10,10 @@
   <meta name="description" content="Odyssea — Ὀδύσσεια. 20 semaines, 4 chants, 1 destination." />
   <title>Odyssea — Ὀδύσσεια</title>
 
-  <!-- Fonts : Plus Jakarta Sans (texte) + EB Garamond italic (grec ancien) -->
+  <!-- Fonts : Plus Jakarta Sans + EB Garamond + JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=EB+Garamond:ital@1&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400;1,500&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
 
   <!-- PWA -->
   <link rel="manifest" href="./manifest.json" />
@@ -25,57 +25,169 @@
 
   <style>
     /* ==========================================================
-       Design tokens — Odyssea (SPEC v3 §Niveau 1)
-       Tokens renommés mythologiquement, mêmes hex que mobility-dashboard.
+       Odyssea Design System v2 — tokens.css
+       Source de vérité visuelle. Aucune couleur en dur ailleurs.
        ========================================================== */
     :root {
-      /* Backgrounds */
-      --bg-primary: #0D0F0E;
-      --bg-surface: #111412;
+      /* ─── BACKGROUNDS ─── */
+      --bg-primary:       #0D0F0E;
+      --bg-surface:       #111412;
       --bg-surface-hover: #141815;
+      --bg-deep:          #07090A;
 
-      /* Borders */
-      --border-subtle: rgba(255, 255, 255, 0.06);
-      --border-strong: rgba(255, 255, 255, 0.10);
-      --border-active: #1A1E1C;
+      /* ─── BORDERS ─── */
+      --border-subtle:     rgba(255, 255, 255, 0.06);
+      --border-strong:     rgba(255, 255, 255, 0.10);
+      --border-active:     #1A1E1C;
+      --surface-highlight: rgba(255, 255, 255, 0.025);
 
-      /* Accents — mythologie */
-      --accent-laurel:  #3ECFA0;  /* succès, set validé, victoire mortelle */
-      --accent-olympus: #E8A020;  /* divin, PR battu, rang supérieur */
-      --accent-royal:   #B990E0;  /* noble, info, achievement */
-      --accent-blood:   #E05A4A;  /* sacrifice, recul, danger */
+      /* ─── ACCENTS ─── */
+      --accent-laurel:  #3ECFA0;
+      --accent-olympus: #E8A020;
+      --accent-royal:   #B990E0;
+      --accent-blood:   #E05A4A;
 
-      /* Text */
-      --text-primary:   #F5F5F3;
-      --text-secondary: #7A7C7A;
-      --text-tertiary:  #4A4D4B;
+      /* ─── TEXT ─── */
+      --text-primary:    #F5F5F3;
+      --text-secondary:  #7A7C7A;
+      --text-tertiary:   #4A4D4B;
+      --text-quaternary: #2E312F;
 
-      /* Streak ranks (Mortel→Olympien) */
-      --rank-mortel:    #7A7C7A;
-      --rank-hoplite:   #CD8032;
-      --rank-stratege:  #A8A8BE;
-      --rank-heros:     #DAA520;
-      --rank-demidieu:  #B8E0F8;
-      --rank-olympien:  #C39BD3;
+      /* ─── DATA VIZ ─── */
+      --viz-baseline: var(--text-tertiary);
+      --viz-record:   var(--accent-olympus);
+      --viz-current:  var(--accent-laurel);
+      --viz-zone:     rgba(62, 207, 160, 0.06);
 
-      /* Typography */
-      --font-sans:  'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      --font-greek: 'EB Garamond', 'Times New Roman', Georgia, serif;
+      /* ─── TYPOGRAPHY ─── */
+      --font-sans:  'Plus Jakarta Sans', system-ui, sans-serif;
+      --font-greek: 'EB Garamond', 'Times New Roman', serif;
+      --font-mono:  'JetBrains Mono', ui-monospace, monospace;
 
-      /* Layout */
-      --bottom-nav-h: 72px;
+      /* ─── SIZES ─── */
+      --size-totem-xl:    56px;
+      --size-totem-lg:    40px;
+      --size-totem-md:    32px;
+      --size-numeric:     24px;
+      --size-inscription: 11px;
+
+      /* ─── DEPTH (tablette de pierre) ─── */
+      --depth-tablet:
+        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.4),
+        0 1px 0 rgba(0, 0, 0, 0.5);
+
+      /* ─── SPACING (4-base) ─── */
+      --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+      --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+
+      /* ─── RADIUS ─── */
+      --r-sm: 4px; --r-md: 6px; --r-lg: 8px;
+
+      /* ─── DURATIONS ─── */
+      --d-fast:   120ms;
+      --d-base:   240ms;
+      --d-slow:   600ms;
+      --d-ritual: 1800ms;
+
+      /* ─── LEGACY COMPAT ─── */
+      --rank-mortel:   #7A7C7A; --rank-hoplite:  #CD8032;
+      --rank-stratege: #A8A8BE; --rank-heros:    #DAA520;
+      --rank-demidieu: #B8E0F8; --rank-olympien: #C39BD3;
+      --bottom-nav-h: 64px;
       --max-app-width: 430px;
-
-      /* Motion */
-      --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
-      --dur-fast: 0.15s;
-      --dur-normal: 0.25s;
+      --ease-out: cubic-bezier(0.4, 0, 0.2, 1);
+      --dur-fast: 0.12s;
+      --dur-normal: 0.24s;
     }
 
+    /* ─── UTILITY CLASSES ─── */
+    .ody-tablet {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      box-shadow: var(--depth-tablet);
+      border-radius: var(--r-md);
+      position: relative;
+    }
+    .ody-tablet::before {
+      content: '';
+      position: absolute; inset: 3px;
+      border-radius: calc(var(--r-md) - 2px);
+      border: 1px solid var(--surface-highlight);
+      pointer-events: none;
+    }
+    .ody-meander {
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><path d='M0 4h12v8h-8v8h16v-8h-8V4h12' stroke='%23ffffff' stroke-opacity='0.035' stroke-width='1' fill='none'/></svg>");
+      background-size: 64px 64px;
+    }
+    .ody-inscription {
+      font-family: var(--font-sans);
+      font-size: var(--size-inscription);
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+    }
+    .ody-totem {
+      font-family: var(--font-sans);
+      font-weight: 800;
+      letter-spacing: -0.025em;
+      line-height: 0.95;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-primary);
+    }
+    .ody-greek {
+      font-family: var(--font-greek);
+      font-style: italic;
+      color: var(--text-secondary);
+      line-height: 1.4;
+    }
+    .ody-tactical {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--text-tertiary);
+    }
+    .ody-btn-primary {
+      background: var(--accent-olympus);
+      color: var(--bg-primary);
+      border: none;
+      border-radius: 0;
+      padding: 14px 0;
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      cursor: pointer;
+      min-height: 56px;
+      width: 100%;
+      transition: filter var(--d-fast);
+    }
+    .ody-btn-primary:active { filter: brightness(0.92); }
+    .ody-btn-secondary {
+      background: transparent;
+      color: var(--text-primary);
+      border: 1px solid var(--border-strong);
+      border-radius: 0;
+      padding: 12px 0;
+      font-family: var(--font-sans);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      cursor: pointer;
+      min-height: 44px;
+      width: 100%;
+      transition: border-color var(--d-fast), background var(--d-fast);
+    }
+
+    /* ─── RESET ─── */
     *, *::before, *::after { box-sizing: border-box; }
-    html, body, #root { height: 100%; }
+    html, body, #root { height: 100%; margin: 0; padding: 0; }
     body {
-      margin: 0;
       background: var(--bg-primary);
       color: var(--text-primary);
       font-family: var(--font-sans);
@@ -91,6 +203,7 @@
 
     .greek { font-family: var(--font-greek); font-style: italic; }
 
+    /* ─── APP SHELL ─── */
     .app-shell {
       min-height: 100%;
       max-width: var(--max-app-width);
@@ -100,7 +213,6 @@
       flex-direction: column;
       position: relative;
       padding-top: env(safe-area-inset-top, 0px);
-      box-sizing: border-box;
     }
     .app-main {
       flex: 1 1 auto;
@@ -108,10 +220,6 @@
       min-height: 0;
     }
     .app-main--no-nav { padding-bottom: env(safe-area-inset-bottom, 0px); }
-
-    /* Mode Séance (focus plein écran) — cache la bottom nav et le header logo.
-       !important nécessaire car BottomNav et AppHeader appliquent display via
-       style inline, qui écrase une règle de class normale. */
     .app-shell.session-focus nav[aria-label="Navigation principale"],
     .app-shell.session-focus header { display: none !important; }
     .app-shell.session-focus .app-main { padding-bottom: env(safe-area-inset-bottom, 0px); }
@@ -137,11 +245,33 @@
       font-style: italic;
       font-size: 48px;
     }
+
+    /* ─── KEYFRAMES ─── */
     @keyframes spin { to { transform: rotate(360deg); } }
     @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
     @keyframes fade-in-up {
       from { opacity: 0; transform: translateY(8px); }
       to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes halo-cascade {
+      from { opacity: 0; transform: scale(0.5); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    @keyframes pr-scale {
+      from { transform: scale(0.92); opacity: 0; }
+      to   { transform: scale(1); opacity: 1; }
+    }
+    @keyframes char-reveal {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    @keyframes star-spin {
+      from { transform: scale(0) rotate(180deg); }
+      to   { transform: scale(1) rotate(0deg); }
+    }
+    @keyframes meander-slide {
+      from { transform: translateX(-100%); }
+      to   { transform: translateX(100vw); }
     }
   </style>
 </head>
@@ -177,11 +307,12 @@
   const ATHX_DATE = '2026-09-19';
 
   const ROUTES = {
-    AUJOURDHUI: '/aujourdhui',
-    SEMAINE:    '/semaine',
-    HEROS:      '/heros',
-    CARTE:      '/carte',
-    STATS:      '/stats',     // legacy — redirige vers /heros (gardé pour bookmarks)
+    AUJOURDHUI:  '/aujourdhui',
+    SEMAINE:     '/semaine',
+    HEROS:       '/heros',
+    PROGRESSION: '/progression',
+    CARTE:       '/carte',
+    STATS:       '/stats',     // legacy — redirige vers /heros (gardé pour bookmarks)
     REGLAGES:   '/reglages',
   };
   const DEFAULT_ROUTE = ROUTES.AUJOURDHUI;
@@ -191,10 +322,10 @@
      ========================================================== */
   // Blocks renommés (v4 patch — Lotophages en B1, pattern de drop documenté)
   const BLOCKS = [
-    { id: 1, name: 'Les Lotophages', weeks: [1,  6]  },
-    { id: 2, name: 'Le Cyclope',     weeks: [7,  12] },
-    { id: 3, name: 'Circé',          weeks: [13, 16] },
-    { id: 4, name: 'Ithaque',        weeks: [17, 20] },
+    { id: 1, name: 'Les Lotophages', glyph: 'A', weeks: [1,  6]  },
+    { id: 2, name: 'Le Cyclope',     glyph: 'B', weeks: [7,  12] },
+    { id: 3, name: 'Circé',          glyph: 'Γ', weeks: [13, 16] },
+    { id: 4, name: 'Ithaque',        glyph: 'Δ', weeks: [17, 20] },
   ];
 
   // Streak ranks Mortel → Olympien
@@ -391,6 +522,87 @@
     for (const c of day) h = (h * 31 + c.charCodeAt(0)) | 0;
     return MANTRAS[Math.abs(h) % MANTRAS.length];
   }
+
+  /* ==========================================================
+     SEED DATA V2 — fixtures from design handoff (data-model.md)
+     Utilisées pour affichage quand les données réelles sont vides.
+     ========================================================== */
+  const SEED_LIFTS = [
+    { key: 'squat',    name: 'Back Squat',     baseline: 135, record: 162, history: [138, 142, 145, 148, 152] },
+    { key: 'deadlift', name: 'Deadlift',       baseline: 175, record: 202, history: [178, 182, 184, 188, 192] },
+    { key: 'bench',    name: 'Bench Press',     baseline: 95,  record: 118, history: [98, 100, 102, 105, 108] },
+    { key: 'ohp',      name: 'Overhead Press',  baseline: 60,  record: 72,  history: [62, 63, 64, 66, 68] },
+    { key: 'row',      name: 'Pendlay Row',     baseline: 80,  record: 102, history: [82, 84, 86, 88, 92] },
+  ];
+
+  const SEED_SESSIONS_S5 = [
+    { id: 'S5-LUN', dayIdx: 1, kind: 'Strength 1', label: 'STR 1', glyph: 'Σ', status: 'done',     volume: 8240, duration: 52, prMarks: 1, exos: 5 },
+    { id: 'S5-MAR', dayIdx: 2, kind: null,          label: null,    glyph: null, status: 'rest',     volume: null, duration: null, prMarks: 0, exos: 0 },
+    { id: 'S5-MER', dayIdx: 3, kind: 'Energy 1',    label: 'ENG 1', glyph: 'Π', status: 'done',     volume: 4180, duration: 38, prMarks: 0, exos: 4 },
+    { id: 'S5-JEU', dayIdx: 4, kind: null,          label: null,    glyph: null, status: 'rest',     volume: null, duration: null, prMarks: 0, exos: 0 },
+    { id: 'S5-VEN', dayIdx: 5, kind: 'Strength 2',  label: 'STR 2', glyph: 'Σ', status: 'today',    volume: null, duration: null, prMarks: 0, exos: 5 },
+    { id: 'S5-SAM', dayIdx: 6, kind: 'Energy 2',    label: 'ENG 2', glyph: 'Π', status: 'upcoming', volume: null, duration: null, prMarks: 0, exos: 4 },
+    { id: 'S5-DIM', dayIdx: 7, kind: null,          label: null,    glyph: null, status: 'rest',     volume: null, duration: null, prMarks: 0, exos: 0 },
+  ];
+
+  const SEED_SLOTS_LUN = [
+    { slotIdx: 1, name: 'Back Squat',        format: 'TOP',  prescription: '1x3 @8 RPE -> 3x5 @75% backoff' },
+    { slotIdx: 2, name: 'Pause Low Incline',  format: 'DBL',  prescription: '4x5 double progression' },
+    { slotIdx: 3, name: 'Pendlay Row',        format: 'EMOM', prescription: '8 min 4 reps/min' },
+    { slotIdx: 4, name: 'Hanging Leg Raise',  format: 'DENS', prescription: 'Density 14 min max sets de 8' },
+    { slotIdx: 5, name: 'Box Jump 60cm',      format: 'JUMP', prescription: 'Jump for 10 min 3/min' },
+  ];
+
+  const SEED_KPI = [
+    { label: 'Volume Load', value: '12.4k', unit: 'kg', delta: '+8%', ref: 'vs S4',     accent: 'var(--accent-laurel)' },
+    { label: 'Sessions',    value: '2/4',   unit: '',   delta: null,   ref: 'cette sem', accent: null },
+    { label: 'Streak',      value: '14',    unit: 'j',  delta: 'Stratege', ref: 'rang',  accent: 'var(--accent-olympus)' },
+    { label: 'ATHX',        value: '136',   unit: 'j',  delta: null,   ref: 'restants',  accent: 'var(--accent-olympus)' },
+  ];
+
+  const SEED_ATHX_STANDARDS = [
+    { lift: 'squat',    current: 152, target: 164, ratio: 1.85, targetRatio: 2.0 },
+    { lift: 'deadlift', current: 192, target: 205, ratio: 2.34, targetRatio: 2.5 },
+    { lift: 'bench',    current: 108, target: 123, ratio: 1.32, targetRatio: 1.5 },
+    { lift: 'ohp',      current: 68,  target: 82,  ratio: 0.83, targetRatio: 1.0 },
+    { lift: 'row',      current: 92,  target: 123, ratio: 1.12, targetRatio: 1.5 },
+  ];
+
+  const ATTRIBUTES_INFO = {
+    sthenos: {
+      label: 'Sthenos', glyph: 'Σ', color: 'var(--accent-laurel)',
+      formula: 'moyenne ponderee e1RM Squat/Deadlift/Bench/OHP/Row, normalisee vs seuil ATHX (xBW)',
+      advice: 'progresse via les TOP sets Strength 1/2 — ajoute du tonnage absolu, vise +2.5kg/sem.'
+    },
+    bia: {
+      label: 'Bia', glyph: 'B', color: 'var(--accent-olympus)',
+      formula: 'index puissance derive des slots JUMP/THROW/SPRINT — vitesse x charge sur mouvements explosifs',
+      advice: 'concentre-toi sur les box jumps et med ball throws en debut de seance, repos complet entre tentatives.'
+    },
+    ponos: {
+      label: 'Ponos', glyph: 'Π', color: 'var(--accent-royal)',
+      formula: 'volume tenable x densite — temps sous tension cumule sur les slots EMOM/DENS/MAP',
+      advice: 'ne saute pas les Energy 1/2 — la densite paye sur l\'horizon ATHX, ajoute 1 round si RPE < 8.'
+    },
+    metis: {
+      label: 'Metis', glyph: 'M', color: 'var(--text-secondary)',
+      formula: 'qualite technique x choix tactiques — RPE prescrits respectes, charge auto-regulee correctement',
+      advice: 'travaille les fondations : sors de ta zone, fais 1 set technique a RPE 6 avant chaque TOP set.'
+    },
+    arete: {
+      label: 'Arete', glyph: 'A', color: 'var(--accent-laurel)',
+      formula: 'agregat des 4 autres + assiduite (seances tenues / planifiees) + PR cumules sur le bloc',
+      advice: 'tiens la regularite — 4 seances sur 4 cette semaine, et l\'Arete monte mecaniquement.'
+    },
+  };
+
+  const ATTR_KEYS = ['sthenos', 'bia', 'ponos', 'metis', 'arete'];
+  const SEED_ATTRIBUTES = {
+    current: { sthenos: 0.62, bia: 0.58, ponos: 0.71, metis: 0.49, arete: 0.60 },
+    baseline: { sthenos: 0.30, bia: 0.30, ponos: 0.35, metis: 0.20, arete: 0.29 },
+  };
+  const SEED_VOLUME_DIST = { sthenos: 0.42, bia: 0.18, ponos: 0.28, metis: 0.08, arete: 0.04 };
+  const DAY_LABELS = ['', 'LUN', 'MAR', 'MER', 'JEU', 'VEN', 'SAM', 'DIM'];
 
   // Mood tracking (SPEC §11 Étape 9) — 4 emojis post-session.
   const MOOD_OPTIONS = [
@@ -1234,6 +1446,140 @@
   };
 
   /* ==========================================================
+     PRIMITIVES V2 — Design System Odyssea
+     ========================================================== */
+  const VerginaStar = ({ size = 24, color = 'var(--accent-olympus)', filled = true }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-label="Etoile de Vergina">
+      {[0, 45, 90, 135, 180, 225, 270, 315].map(deg => (
+        <g key={deg} transform={`rotate(${deg} 12 12)`}>
+          <path d="M 12 0 L 13.2 10.5 L 12 12 L 10.8 10.5 Z"
+            fill={filled ? color : 'none'} stroke={color} strokeWidth="0.6"/>
+        </g>
+      ))}
+      <circle cx="12" cy="12" r="1.5" fill="var(--bg-primary)"/>
+      <circle cx="12" cy="12" r="0.8" fill={color}/>
+    </svg>
+  );
+
+  const HaloPR = ({ size = 200, color = 'var(--accent-olympus)' }) => {
+    const c = size / 2;
+    return (
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)'}}>
+        {[0.95, 0.78, 0.60, 0.42, 0.24].map((r, i) => (
+          <circle key={i} cx={c} cy={c} r={c * r}
+            fill="none" stroke={color} strokeWidth="0.8"
+            strokeOpacity={0.15 + i * 0.10}
+            style={{animation: `halo-cascade 400ms ${i * 80}ms both`}}/>
+        ))}
+      </svg>
+    );
+  };
+
+  const BlockBeads = ({ total = 6, current = 5 }) => (
+    <div style={{display:'flex',gap:6,alignItems:'center',height:12}}>
+      {Array.from({length: total}, (_, i) => {
+        const isDone = i < current;
+        const isCurrent = i === current - 1;
+        return (
+          <div key={i} style={{
+            width: 8, height: 8, borderRadius: '50%',
+            background: isCurrent ? 'var(--accent-olympus)' : isDone ? 'var(--accent-laurel)' : 'transparent',
+            border: isDone ? 'none' : '1px solid var(--text-tertiary)',
+          }}/>
+        );
+      })}
+    </div>
+  );
+
+  const Inscription = ({ size = 'sm', style: sx, children }) => {
+    const fs = size === 'xs' ? 9 : size === 'md' ? 13 : 11;
+    return <span className="ody-inscription" style={{fontSize: fs, ...sx}}>{children}</span>;
+  };
+
+  const Totem = ({ size = 32, color, children }) => (
+    <div className="ody-totem" style={{fontSize: size, color: color || 'var(--text-primary)'}}>{children}</div>
+  );
+
+  const KPITile = ({ label, value, unit, delta, caption, accent }) => (
+    <div className="ody-tablet" style={{padding: 'var(--sp-3) var(--sp-4)'}}>
+      <Inscription size="xs">{label}</Inscription>
+      <div style={{display:'flex',alignItems:'baseline',gap:4,marginTop:4}}>
+        <span style={{fontFamily:'var(--font-sans)',fontSize:'var(--size-numeric)',fontWeight:800,color:'var(--text-primary)',fontVariantNumeric:'tabular-nums'}}>{value}</span>
+        {unit && <span style={{fontSize:11,color:'var(--text-secondary)',fontWeight:600}}>{unit}</span>}
+      </div>
+      <div style={{marginTop:2,display:'flex',gap:4,alignItems:'baseline'}}>
+        {delta && <span style={{fontSize:10,fontWeight:700,color:accent||'var(--text-secondary)',fontFamily:'var(--font-mono)'}}>{delta}</span>}
+        {caption && <span style={{fontSize:9,color:'var(--text-tertiary)'}}>{caption}</span>}
+      </div>
+    </div>
+  );
+
+  // E1RMCurve — courbe 20 semaines pour /progression
+  const E1RMCurve = ({ liftKey, width = 328, height = 220 }) => {
+    const lift = SEED_LIFTS.find(l => l.key === liftKey);
+    if (!lift) return null;
+    const { baseline, record, history } = lift;
+    const totalWeeks = 20;
+    const padL = 30, padR = 10, padT = 20, padB = 30;
+    const chartW = width - padL - padR;
+    const chartH = height - padT - padB;
+    const allVals = [baseline, record, ...history];
+    const minV = Math.min(...allVals) - 10;
+    const maxV = Math.max(...allVals) + 10;
+    const xOf = (w) => padL + (w / totalWeeks) * chartW;
+    const yOf = (v) => padT + chartH - ((v - minV) / (maxV - minV)) * chartH;
+
+    const points = history.map((v, i) => `${xOf(i + 1)},${yOf(v)}`).join(' ');
+    const lastPt = history.length > 0 ? { x: xOf(history.length), y: yOf(history[history.length - 1]) } : null;
+
+    // Zone de progression (area fill)
+    const areaPath = history.length > 1
+      ? `M${xOf(1)},${yOf(baseline)} ` + history.map((v, i) => `L${xOf(i + 1)},${yOf(v)}`).join(' ') + ` L${xOf(history.length)},${yOf(baseline)} Z`
+      : '';
+
+    const ticks = [1, 5, 10, 15, 20];
+
+    return (
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+        {/* Zone fill */}
+        {areaPath && <path d={areaPath} fill="var(--viz-zone)" />}
+        {/* Baseline dashed */}
+        <line x1={padL} y1={yOf(baseline)} x2={width - padR} y2={yOf(baseline)}
+          stroke="var(--viz-baseline)" strokeWidth="1" strokeDasharray="4 3" />
+        {/* Record dashed */}
+        <line x1={padL} y1={yOf(record)} x2={width - padR} y2={yOf(record)}
+          stroke="var(--viz-record)" strokeWidth="1" strokeDasharray="4 3" />
+        {/* Courbe */}
+        <polyline points={points} fill="none" stroke="var(--viz-current)" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
+        {/* Points */}
+        {history.map((v, i) => (
+          <circle key={i} cx={xOf(i + 1)} cy={yOf(v)} r={i === history.length - 1 ? 3.5 : 2}
+            fill={i === history.length - 1 ? 'var(--viz-record)' : 'var(--viz-current)'}
+            stroke={i === history.length - 1 ? 'var(--viz-record)' : 'none'} strokeWidth="1.5" />
+        ))}
+        {/* Ticks X */}
+        {ticks.map(w => (
+          <text key={w} x={xOf(w)} y={height - 8} textAnchor="middle"
+            fontSize="9" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">S{w}</text>
+        ))}
+        {/* Baseline label */}
+        <text x={padL - 4} y={yOf(baseline)} textAnchor="end" dominantBaseline="middle"
+          fontSize="9" fontFamily="var(--font-mono)" fill="var(--text-tertiary)">{baseline}</text>
+        {/* Record label */}
+        <text x={padL - 4} y={yOf(record)} textAnchor="end" dominantBaseline="middle"
+          fontSize="9" fontFamily="var(--font-mono)" fill="var(--accent-olympus)">{record}</text>
+        {/* PR annotation */}
+        {lastPt && (
+          <text x={lastPt.x + 8} y={lastPt.y - 8}
+            fontSize="11" fontFamily="var(--font-greek)" fontStyle="italic" fill="var(--accent-olympus)">
+            PR {history[history.length - 1]}
+          </text>
+        )}
+      </svg>
+    );
+  };
+
+  /* ==========================================================
      Logo — Ω + Odyssea + Ὀδύσσεια (SPEC v3 §Identité)
      ========================================================== */
   const Logo = ({ size = 'md' }) => {
@@ -1270,12 +1616,10 @@
      Bottom nav — 4 routes, pattern mobility-dashboard
      ========================================================== */
   const NAV_ITEMS = [
-    { id: 'today',    to: ROUTES.AUJOURDHUI, label: "Aujourd'hui", icon: Icons.dumbbell, activeColor: 'var(--accent-laurel)'  },
-    { id: 'week',     to: ROUTES.SEMAINE,    label: 'Semaine',     icon: Icons.calendar, activeColor: 'var(--accent-royal)'   },
-    { id: 'heros',    to: ROUTES.HEROS,      label: 'Héros',       icon: Icons.column,   activeColor: 'var(--accent-olympus)' },
-    // /carte accessible via <Link> dans /aujourdhui ou directement à l'URL.
-    // Pas dans la bottom nav pour ne pas saturer (limite à 4 items).
-    { id: 'settings', to: ROUTES.REGLAGES,   label: 'Réglages',    icon: Icons.settings, activeColor: 'var(--accent-olympus)' },
+    { id: 'aujourdhui',  to: ROUTES.AUJOURDHUI,  label: "Aujourd'hui" },
+    { id: 'semaine',     to: ROUTES.SEMAINE,      label: 'Semaine' },
+    { id: 'heros',       to: ROUTES.HEROS,        label: 'Heros' },
+    { id: 'progression', to: ROUTES.PROGRESSION,  label: 'Progression' },
   ];
 
   const BottomNav = () => {
@@ -1300,7 +1644,6 @@
       >
         {NAV_ITEMS.map(item => {
           const active = path === item.to;
-          const color = active ? item.activeColor : '#8A8F8C';
           return (
             <button
               key={item.id}
@@ -1312,33 +1655,29 @@
                 background: 'transparent',
                 border: 'none',
                 cursor: 'pointer',
-                padding: 0,
+                padding: '0 0 2px',
                 position: 'relative',
                 display: 'flex',
-                flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: 5,
-                color,
-                transition: 'color var(--dur-fast) var(--ease-out)',
+                color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                fontSize: 11,
+                fontWeight: active ? 800 : 600,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                fontFamily: 'var(--font-sans)',
+                transition: 'color var(--d-fast)',
               }}
             >
+              {item.label}
               {active && (
                 <span aria-hidden="true" style={{
-                  position: 'absolute', top: 0, left: '50%',
+                  position: 'absolute', bottom: 0, left: '50%',
                   transform: 'translateX(-50%)',
-                  width: 28, height: 2.5,
-                  background: item.activeColor,
+                  width: 24, height: 2,
+                  background: 'var(--accent-olympus)',
                 }} />
               )}
-              {item.icon(color, 22)}
-              <span style={{
-                fontSize: 10,
-                fontWeight: active ? 800 : 600,
-                letterSpacing: '-0.2px',
-                whiteSpace: 'nowrap',
-                color,
-              }}>{item.label}</span>
             </button>
           );
         })}
@@ -1740,83 +2079,74 @@
   );
 
   /* ==========================================================
-     RadarChart — pentagon SVG 5 axes
-     `axes`     = [{id, label, value 0..1}, ...] — état actuel (polygone plein)
-     `axesPrev` = même forme — snapshot historique optionnel, rendu en
-       stroke pointillé sans fill, comme une trace fantôme. La hiérarchie
-       est claire : l'actuel domine, le passé est référence.
+     Radar — 5 concentric dotted rings, baseline+current polygons
+     Per design handoff: vertex discs 2.5px, central glyph EB Garamond 36px
      ========================================================== */
-  const RadarChart = ({ axes, axesPrev = null, size = 240, color = 'var(--accent-laurel)' }) => {
+  const Radar = ({ size = 280, current, baseline, glyph = 'Α', accent = 'var(--accent-laurel)', accentBaseline = 'var(--text-tertiary)', showRings = 5 }) => {
+    const axes = ['Σ', 'Β', 'Π', 'Μ', 'Α'];
     const cx = size / 2, cy = size / 2;
-    const r = (size / 2) - 28;
-    const N = axes.length;
-    const point = (i, value) => {
-      const angle = (i * 2 * Math.PI) / N - Math.PI / 2;
-      return [cx + r * value * Math.cos(angle), cy + r * value * Math.sin(angle)];
+    const rMax = (size / 2) - 30;
+    const N = 5;
+    const pt = (i, val) => {
+      const a = (i * 2 * Math.PI) / N - Math.PI / 2;
+      return [cx + rMax * val * Math.cos(a), cy + rMax * val * Math.sin(a)];
     };
-    const labelPoint = (i) => {
-      const angle = (i * 2 * Math.PI) / N - Math.PI / 2;
-      const lr = r + 16;
-      return [cx + lr * Math.cos(angle), cy + lr * Math.sin(angle)];
+    const poly = (vals) => vals.map((v, i) => pt(i, v).join(',')).join(' ');
+    const ringPoly = (pct) => Array.from({length: N}, (_, i) => pt(i, pct).join(',')).join(' ');
+    const labelPt = (i) => {
+      const a = (i * 2 * Math.PI) / N - Math.PI / 2;
+      return [cx + (rMax + 18) * Math.cos(a), cy + (rMax + 18) * Math.sin(a)];
     };
-    const grid = [0.25, 0.5, 0.75, 1];
-    const polyAt = (value) => axes.map((_, i) => point(i, value).join(',')).join(' ');
-    const valuePoly = axes.map((a, i) => point(i, a.value).join(',')).join(' ');
-    const prevPoly = axesPrev
-      ? axesPrev.map((a, i) => point(i, a.value).join(',')).join(' ')
-      : null;
 
     return (
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Radar des performances">
-        {/* Grille concentrique */}
-        {grid.map((g, idx) => (
-          <polygon key={idx} points={polyAt(g)}
-                   fill="none"
-                   stroke="var(--border-subtle)"
-                   strokeWidth={idx === grid.length - 1 ? 1 : 0.6} />
-        ))}
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Radar 5 attributs">
+        {/* Concentric rings — dotted */}
+        {Array.from({length: showRings}, (_, i) => {
+          const pct = (i + 1) / showRings;
+          return <polygon key={i} points={ringPoly(pct)} fill="none"
+            stroke="var(--border-subtle)" strokeWidth="0.6" strokeDasharray="2 2" />;
+        })}
         {/* Axes */}
-        {axes.map((_, i) => {
-          const [x, y] = point(i, 1);
-          return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="var(--border-subtle)" strokeWidth={0.6} />;
+        {Array.from({length: N}, (_, i) => {
+          const [x, y] = pt(i, 1);
+          return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="var(--border-subtle)" strokeWidth="0.4" />;
         })}
-        {/* Snapshot passé : rendu EN-DESSOUS du polygone actuel pour ne
-            pas voler la lecture. Stroke pointillé, pas de fill. */}
-        {prevPoly && (
-          <polygon points={prevPoly}
-                   fill="none"
-                   stroke="var(--text-tertiary)"
-                   strokeWidth="1"
-                   strokeDasharray="3 3" />
+        {/* Baseline polygon — dashed */}
+        {baseline && <polygon points={poly(baseline)} fill="none"
+          stroke={accentBaseline} strokeWidth="1" strokeDasharray="4 3" />}
+        {/* Current polygon — filled 18% + stroke */}
+        {current && (
+          <>
+            <polygon points={poly(current)} fill={accent} fillOpacity="0.18"
+              stroke={accent} strokeWidth="1.5" />
+            {/* Vertex discs */}
+            {current.map((v, i) => {
+              const [x, y] = pt(i, v);
+              return <circle key={i} cx={x} cy={y} r="2.5" fill={accent} />;
+            })}
+          </>
         )}
-        {/* Polygone valeurs (actuel) */}
-        <polygon points={valuePoly}
-                 fill={color} fillOpacity="0.15"
-                 stroke={color} strokeWidth="1.5" />
-        {/* Points sur les axes (actuel) */}
-        {axes.map((a, i) => {
-          const [x, y] = point(i, a.value);
-          return <circle key={`p${i}`} cx={x} cy={y} r={3} fill={color} />;
-        })}
-        {/* Labels — Greek attribute names en EB Garamond italic.
-            La mythologie vit dans la typo, pas en décoration. */}
-        {axes.map((a, i) => {
-          const [x, y] = labelPoint(i);
+        {/* Central glyph */}
+        <text x={cx} y={cy + 2} textAnchor="middle" dominantBaseline="middle"
+          fontSize="36" fontFamily="var(--font-greek)" fontStyle="italic"
+          fill="var(--text-primary)" opacity="0.85">{glyph}</text>
+        {/* Axis labels */}
+        {axes.map((label, i) => {
+          const [x, y] = labelPt(i);
           return (
-            <text key={`l${i}`} x={x} y={y}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  fontSize="13"
-                  fontWeight="500"
-                  fontFamily="var(--font-greek)"
-                  fontStyle="italic"
-                  fill="var(--text-secondary)">
-              {a.label}
-            </text>
+            <text key={i} x={x} y={y} textAnchor="middle" dominantBaseline="middle"
+              fontSize="13" fontFamily="var(--font-greek)" fontStyle="italic"
+              fill="var(--text-secondary)">{label}</text>
           );
         })}
       </svg>
     );
+  };
+  // Legacy compat alias
+  const RadarChart = ({ axes, axesPrev, size, color }) => {
+    const current = axes ? axes.map(a => a.value) : null;
+    const baseline = axesPrev ? axesPrev.map(a => a.value) : null;
+    return React.createElement(Radar, { size: size || 260, current, baseline, accent: color });
   };
 
   /* ==========================================================
@@ -3288,137 +3618,145 @@
       );
     }
 
-    // ÉTAT 1 — preview (par défaut)
+    // ÉTAT 1 — preview brutaliste
+    const todaySession = SEED_SESSIONS_S5.find(s => s.status === 'today');
+    const todayLabel = todaySession ? todaySession.label : (day.label || 'STR 2');
+    const todayKind = todaySession ? todaySession.kind : 'Strength 2';
     return (
       <>
-        <PageWrap title={day.label} subtitle={`${day.fr} · Bloc ${block.id} · ${block.name} · Sem ${week}/${block.weeks[1]}`}>
-          <div className="greek" style={{
-            marginBottom: 14,
-            fontSize: 14,
-            fontStyle: 'italic',
-            color: 'var(--text-secondary)',
-            textAlign: 'center',
-            lineHeight: 1.4,
-            opacity: 0.85,
+        <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
+          {/* Header tactique mono */}
+          <div style={{
+            padding: 'var(--sp-5) 0 var(--sp-3)',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
           }}>
-            « {pickMantraOfDay()} »
-          </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <AthxCountdown />
-            {streak && <StreakBadge streak={streak} />}
-          </div>
-          {/* Compagnon symbolique : "Athéna observe" — visible quand au moins
-              1 set a été validé sur la session du jour (la session est en cours). */}
-          {setsBySlot && Object.values(setsBySlot).some(arr => arr.length > 0) && <AthenaPresence />}
-
-          {/* Bouton Le Souffle — visible avant le 1er set sur les sessions DL/Squat lourd */}
-          {dayHasHeavyLift && setsBySlot && Object.values(setsBySlot).every(arr => arr.length === 0) && (
-            <button type="button" onClick={() => setShowBreath(true)}
-              style={{
-                marginTop: 10,
-                width: '100%',
-                background: 'transparent',
-                border: '1px dashed var(--accent-royal)',
-                borderRadius: 10,
-                color: 'var(--accent-royal)',
-                padding: '10px 14px',
-                fontSize: 11,
-                letterSpacing: '1.5px',
-                textTransform: 'uppercase',
-                fontWeight: 700,
-                cursor: 'pointer',
+            <div>
+              <div style={{
+                fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
+                color: 'var(--text-secondary)', letterSpacing: '0.12em', textTransform: 'uppercase',
               }}>
-              ⊙ Le Souffle · respiration pré-session
+                {"AUJOURD'HUI"} · {day.fr?.toUpperCase() || 'VEN'} · S{week}
+              </div>
+              <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Inscription size="md">{block.name}</Inscription>
+                <BlockBeads total={block.weeks[1] - block.weeks[0] + 1} current={week - block.weeks[0] + 1} />
+              </div>
+            </div>
+            <span style={{
+              fontFamily: 'var(--font-greek)', fontStyle: 'italic',
+              fontSize: 48, color: 'var(--accent-olympus)', opacity: 0.10,
+              lineHeight: 1, marginTop: -4,
+            }}>{block.glyph}</span>
+          </div>
+
+          {/* Inscription séance type */}
+          <div className="ody-tablet" style={{
+            padding: 'var(--sp-4) var(--sp-5)', marginBottom: 'var(--sp-4)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <div>
+              <Inscription size="xs" style={{color:'var(--text-tertiary)'}}>SÉANCE</Inscription>
+              <div style={{
+                fontFamily: 'var(--font-sans)', fontSize: 22, fontWeight: 800,
+                color: 'var(--text-primary)', marginTop: 2,
+              }}>{todayKind}</div>
+            </div>
+            <span className="ody-tactical" style={{ fontSize: 13 }}>{todayLabel}</span>
+          </div>
+
+          {/* KPI 2×2 grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)' }}>
+            {SEED_KPI.map(kpi => (
+              <KPITile key={kpi.label} label={kpi.label} value={kpi.value} unit={kpi.unit} delta={kpi.delta} caption={kpi.ref} accent={kpi.accent} />
+            ))}
+          </div>
+
+          {/* Slot list */}
+          {!day.strength ? (
+            <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)', color: 'var(--text-secondary)', textAlign: 'center' }}>
+              Jour de repos. Pas de session aujourd'hui.
+            </div>
+          ) : exos === null || exos.length === 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+              {SEED_SLOTS_LUN.map(slot => (
+                <div key={slot.slotIdx} className="ody-tablet" style={{
+                  padding: 'var(--sp-3) var(--sp-4)',
+                  display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
+                }}>
+                  <span className="ody-tactical" style={{ fontSize: 11, color: 'var(--text-tertiary)', minWidth: 18 }}>
+                    {String(slot.slotIdx).padStart(2, '0')}
+                  </span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{slot.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+                      {slot.format} · {slot.prescription}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+              {exos.map(ex => (
+                <div key={ex.id} className="ody-tablet" style={{
+                  padding: 'var(--sp-3) var(--sp-4)',
+                  display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
+                }}>
+                  <span className="ody-tactical" style={{ fontSize: 11, color: 'var(--text-tertiary)', minWidth: 18 }}>
+                    {String(ex.exerciseSlot).padStart(2, '0')}
+                  </span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{ex.exerciseName}</div>
+                    {ex.prescription && (
+                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+                        {ex.prescription}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Mantra */}
+          <div style={{
+            marginTop: 'var(--sp-6)', marginBottom: 'var(--sp-5)',
+            textAlign: 'center',
+          }}>
+            <span style={{
+              fontFamily: 'var(--font-greek)', fontStyle: 'italic',
+              fontSize: 14, color: 'var(--text-tertiary)', lineHeight: 1.5,
+            }}>
+              « {pickMantraOfDay()} »
+            </span>
+          </div>
+
+          {/* DÉMARRER LA SÉANCE — ody-btn-primary, no border-radius per spec */}
+          {day.strength && (
+            <button
+              type="button"
+              className="ody-btn-primary"
+              onClick={startSession}
+              disabled={sessionCompleted}
+              style={{
+                width: '100%', minHeight: 56, marginBottom: 'var(--sp-4)',
+                opacity: sessionCompleted ? 0.4 : 1,
+                cursor: sessionCompleted ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {sessionCompleted ? 'SESSION TERMINÉE' : 'DÉMARRER LA SÉANCE'}
             </button>
           )}
-
-          {/* Les Sirènes — apparait après 20 min idle */}
-          {sirensVisible && <SirensWarning onDismiss={dismissSirens} />}
-
-          {/* Lien discret vers la carte du voyage */}
-          <button type="button" onClick={() => navigate(ROUTES.CARTE)}
-            style={{
-              marginTop: 10,
-              width: '100%',
-              background: 'transparent',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 10,
-              color: 'var(--text-secondary)',
-              padding: '8px 12px',
-              fontSize: 11,
-              letterSpacing: '1.2px',
-              textTransform: 'uppercase',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}>
-            ⟶ Voir la carte du voyage
-          </button>
-          <LotophagesWarning streak={streak} onPardonUsed={() => setStreakTick(t => t + 1)} />
-          {!day.strength ? (
-            <Card style={{ marginTop: 12 }}>
-              <div style={{ color: 'var(--text-secondary)' }}>
-                Pas de session strength aujourd'hui. {day.label}.
-              </div>
-            </Card>
-          ) : exos === null ? (
-            <Card style={{ marginTop: 12 }}><div style={{ color: 'var(--text-secondary)' }}>Chargement du programme…</div></Card>
-          ) : exos.length === 0 ? (
-            <Card style={{ marginTop: 12 }}>
-              <div style={{ color: 'var(--text-primary)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>
-                Programme non chargé
-              </div>
-              <div style={{ color: 'var(--text-secondary)' }}>Reconnecte-toi pour charger la session.</div>
-            </Card>
-          ) : (
-            <>
-              {/* Liste compacte lecture seule des exos du jour */}
-              {exos.map(ex => (
-                <SessionPreviewCard
-                  key={ex.id}
-                  ex={ex}
-                  setsCount={setsBySlot ? (setsBySlot[ex.exerciseSlot] || []).length : 0}
-                />
-              ))}
-
-              {/* Bouton DÉMARRER LA SÉANCE — primaire, large, olympus or.
-                  Désactivé si la session a déjà été terminée par le passé
-                  (l'utilisateur peut consulter les exos mais pas la rejouer). */}
-              <button
-                type="button"
-                onClick={startSession}
-                disabled={sessionCompleted}
-                style={{
-                  width: '100%',
-                  marginTop: 20,
-                  background: sessionCompleted ? 'var(--bg-surface-hover)' : 'var(--accent-olympus)',
-                  color: sessionCompleted ? 'var(--text-tertiary)' : '#0D0F0E',
-                  border: 'none',
-                  borderRadius: 14,
-                  minHeight: 56,
-                  padding: '18px 0',
-                  fontSize: 14,
-                  fontWeight: 800,
-                  letterSpacing: '2px',
-                  textTransform: 'uppercase',
-                  cursor: sessionCompleted ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {sessionCompleted ? 'Session terminée' : 'Démarrer la séance'}
-              </button>
-              {sessionCompleted && (
-                <div style={{
-                  marginTop: 8,
-                  textAlign: 'center',
-                  fontSize: 11,
-                  color: 'var(--text-tertiary)',
-                  letterSpacing: '0.5px',
-                }}>
-                  Cette session est déjà terminée pour aujourd'hui.
-                </div>
-              )}
-            </>
+          {sessionCompleted && (
+            <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 'var(--sp-4)' }}>
+              Session terminée pour aujourd'hui.
+            </div>
           )}
-        </PageWrap>
+
+          {/* Legacy features preserved */}
+          {sirensVisible && <SirensWarning onDismiss={dismissSirens} />}
+          <LotophagesWarning streak={streak} onPardonUsed={() => setStreakTick(t => t + 1)} />
+        </div>
         {endPhrase && (
           <SessionEndOverlay
             phrase={endPhrase}
@@ -3504,36 +3842,227 @@
     const programmeByDay = useWeekProgramme(week, useSeedTick());
     const todayIdx = getCurrentWeekDayIdx();
     const navigate = useNavigate();
+    const [selectedIdx, setSelectedIdx] = useState(todayIdx || 5);
 
-    const empty = programmeByDay && Object.keys(programmeByDay).length === 0;
+    const sessions = SEED_SESSIONS_S5;
+    const sel = sessions[selectedIdx - 1] || sessions[4];
+    const maxVol = Math.max(...sessions.filter(s => s.volume).map(s => s.volume), 1);
+
+    // SVG bar chart dimensions
+    const svgW = 360, svgH = 200, barW = 28, gap = (svgW - 7 * barW) / 8;
+    const chartTop = 40, chartBot = svgH - 30, chartH = chartBot - chartTop;
 
     return (
-      <PageWrap title="Semaine" subtitle={`Bloc ${block.id} · ${block.name} · Sem ${week}/${block.weeks[1]}`}>
-        {programmeByDay === null && (
-          <Card>
-            <div style={{ color: 'var(--text-secondary)' }}>Chargement…</div>
-          </Card>
-        )}
-        {empty && (
-          <Card>
-            <div style={{ color: 'var(--text-primary)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>
-              Programme non chargé
+      <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
+        {/* Header tactique */}
+        <div style={{ padding: 'var(--sp-5) 0 var(--sp-3)' }}>
+          <div style={{
+            fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
+            color: 'var(--text-secondary)', letterSpacing: '0.12em', textTransform: 'uppercase',
+          }}>
+            SEMAINE {week} · BLOC {block.id} · {block.name.toUpperCase()}
+          </div>
+          <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <BlockBeads total={block.weeks[1] - block.weeks[0] + 1} current={week - block.weeks[0] + 1} />
+          </div>
+        </div>
+
+        {/* Console Oraculaire — SVG 7-column graph */}
+        <div className="ody-tablet" style={{ padding: 'var(--sp-3) var(--sp-2)', marginBottom: 'var(--sp-4)' }}>
+          <svg width="100%" viewBox={`0 0 ${svgW} ${svgH}`} style={{ display: 'block' }}>
+            {/* Horizontal rails */}
+            {[0, 0.25, 0.5, 0.75, 1].map(pct => {
+              const y = chartBot - pct * chartH;
+              return <line key={pct} x1={gap} y1={y} x2={svgW - gap} y2={y}
+                stroke="var(--border-subtle)" strokeWidth="0.5" strokeDasharray="3 3" />;
+            })}
+
+            {sessions.map((s, i) => {
+              const x = gap + i * (barW + gap);
+              const isSelected = i + 1 === selectedIdx;
+              const isToday = s.status === 'today';
+              const isDone = s.status === 'done';
+              const isRest = s.status === 'rest';
+              const isUpcoming = s.status === 'upcoming';
+              const barH = isDone && s.volume ? (s.volume / maxVol) * chartH * 0.85 : 0;
+              const barY = chartBot - barH;
+
+              return (
+                <g key={s.id} onClick={() => setSelectedIdx(i + 1)} style={{ cursor: 'pointer' }}>
+                  {/* Selection brackets */}
+                  {isSelected && (
+                    <>
+                      <line x1={x - 2} y1={chartTop - 8} x2={x + 4} y2={chartTop - 8} stroke="var(--accent-olympus)" strokeWidth="2" />
+                      <line x1={x - 2} y1={chartTop - 8} x2={x - 2} y2={chartTop - 2} stroke="var(--accent-olympus)" strokeWidth="2" />
+                      <line x1={x + barW + 2} y1={chartTop - 8} x2={x + barW - 4} y2={chartTop - 8} stroke="var(--accent-olympus)" strokeWidth="2" />
+                      <line x1={x + barW + 2} y1={chartTop - 8} x2={x + barW + 2} y2={chartTop - 2} stroke="var(--accent-olympus)" strokeWidth="2" />
+                    </>
+                  )}
+                  {/* Glyph crown above */}
+                  {s.glyph && (
+                    <text x={x + barW / 2} y={chartTop + 2} textAnchor="middle" fontSize="11"
+                      fontFamily="var(--font-greek)" fontStyle="italic"
+                      fill={isDone ? 'var(--accent-laurel)' : isToday ? 'var(--accent-olympus)' : 'var(--text-tertiary)'}>
+                      {s.glyph}
+                    </text>
+                  )}
+                  {/* Volume label on top of done bars */}
+                  {isDone && s.volume && (
+                    <text x={x + barW / 2} y={barY - 6} textAnchor="middle" fontSize="9"
+                      fontFamily="var(--font-mono)" fill="var(--text-secondary)" fontWeight="500">
+                      {(s.volume / 1000).toFixed(1)}k
+                    </text>
+                  )}
+                  {/* Bar body */}
+                  {isDone && barH > 0 && (
+                    <rect x={x} y={barY} width={barW} height={barH} rx="2"
+                      fill="var(--accent-laurel)" opacity="0.85" />
+                  )}
+                  {isToday && (
+                    <>
+                      <rect x={x} y={chartBot - chartH * 0.35} width={barW} height={chartH * 0.35} rx="2"
+                        fill="var(--accent-olympus)" opacity="0.12"
+                        stroke="var(--accent-olympus)" strokeWidth="1" strokeDasharray="3 2" />
+                      <polygon
+                        points={`${x + barW / 2},${chartBot - chartH * 0.35 - 6} ${x + barW / 2 - 4},${chartBot - chartH * 0.35 + 2} ${x + barW / 2 + 4},${chartBot - chartH * 0.35 + 2}`}
+                        fill="var(--accent-olympus)" />
+                    </>
+                  )}
+                  {isUpcoming && (
+                    <rect x={x} y={chartBot - chartH * 0.25} width={barW} height={chartH * 0.25} rx="2"
+                      fill="none" stroke="var(--text-tertiary)" strokeWidth="0.8" strokeDasharray="3 2" />
+                  )}
+                  {isRest && (
+                    <circle cx={x + barW / 2} cy={chartBot - 2} r="2" fill="var(--text-quaternary)" />
+                  )}
+                  {/* PR star on done days with PR */}
+                  {isDone && s.prMarks > 0 && (
+                    <text x={x + barW / 2} y={barY - 18} textAnchor="middle" dominantBaseline="middle"
+                      fontSize="14" fill="var(--accent-olympus)" fontWeight="800">★</text>
+                  )}
+                  {/* Day label */}
+                  <text x={x + barW / 2} y={svgH - 6} textAnchor="middle" fontSize="10"
+                    fontFamily="var(--font-mono)" fontWeight={isSelected ? '700' : '500'}
+                    fill={isSelected ? 'var(--accent-olympus)' : isToday ? 'var(--text-primary)' : 'var(--text-tertiary)'}
+                    textDecoration={isSelected ? 'underline' : 'none'}>
+                    {DAY_LABELS[i + 1]}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+
+        {/* JourPreviewCard */}
+        <div className="ody-tablet" style={{
+          padding: 'var(--sp-4) var(--sp-5)',
+          borderColor: sel.status === 'done' ? 'rgba(62,207,160,0.3)' :
+                        sel.status === 'today' ? 'rgba(232,160,32,0.3)' :
+                        sel.status === 'rest' ? 'var(--border-subtle)' : 'var(--border-strong)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--sp-3)' }}>
+            <div>
+              <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>
+                {DAY_LABELS[selectedIdx]} · S{week}
+              </Inscription>
+              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', marginTop: 2 }}>
+                {sel.kind || 'Repos'}
+              </div>
             </div>
-            <div style={{ color: 'var(--text-secondary)' }}>
-              Reconnecte-toi à internet et rouvre l'app : le programme se chargera au prochain démarrage.
+            <span style={{
+              fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em',
+              padding: '3px 8px', borderRadius: 'var(--r-sm)',
+              background: sel.status === 'done' ? 'rgba(62,207,160,0.12)' :
+                          sel.status === 'today' ? 'rgba(232,160,32,0.12)' : 'transparent',
+              color: sel.status === 'done' ? 'var(--accent-laurel)' :
+                     sel.status === 'today' ? 'var(--accent-olympus)' : 'var(--text-tertiary)',
+              border: sel.status === 'rest' ? '1px dashed var(--text-tertiary)' : 'none',
+            }}>
+              {sel.status === 'done' ? 'Terminée' : sel.status === 'today' ? 'Aujourd\'hui' :
+               sel.status === 'rest' ? 'Repos' : 'À venir'}
+            </span>
+          </div>
+
+          {sel.status !== 'rest' && (
+            <div style={{ display: 'flex', gap: 'var(--sp-4)', marginBottom: 'var(--sp-4)' }}>
+              <div>
+                <Inscription size="xs">Volume</Inscription>
+                <div className="ody-tactical" style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>
+                  {sel.volume ? `${(sel.volume / 1000).toFixed(1)}k` : '—'}
+                </div>
+              </div>
+              <div>
+                <Inscription size="xs">Durée</Inscription>
+                <div className="ody-tactical" style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>
+                  {sel.duration ? `${sel.duration}'` : '—'}
+                </div>
+              </div>
+              <div>
+                <Inscription size="xs">PR</Inscription>
+                <div className="ody-tactical" style={{ fontSize: 18, fontWeight: 700, marginTop: 2, color: sel.prMarks > 0 ? 'var(--accent-olympus)' : 'var(--text-primary)' }}>
+                  {sel.prMarks || '—'}
+                </div>
+              </div>
             </div>
-          </Card>
-        )}
-        {programmeByDay && !empty && WEEK_DAYS.map(day => (
-          <DayCard
-            key={day.idx}
-            day={day}
-            programme={day.sessionDay ? programmeByDay[day.sessionDay] : null}
-            isToday={day.idx === todayIdx}
-            onTap={() => navigate(`${ROUTES.AUJOURDHUI}?day=${day.sessionDay}`)}
-          />
-        ))}
-      </PageWrap>
+          )}
+
+          {sel.status === 'rest' ? (
+            <div style={{
+              textAlign: 'center', padding: 'var(--sp-4)',
+              border: '1px dashed var(--border-subtle)', borderRadius: 'var(--r-md)',
+              color: 'var(--text-tertiary)', fontSize: 13,
+            }}>
+              REPOS · JOUR LIBRE
+            </div>
+          ) : sel.status === 'today' ? (
+            <button type="button" className="ody-btn-primary" style={{ width: '100%' }}
+              onClick={() => navigate(`${ROUTES.AUJOURDHUI}?day=${WEEK_DAYS.find(d => d.idx === selectedIdx)?.sessionDay || ''}`)}>
+              DÉMARRER
+            </button>
+          ) : sel.status === 'done' ? (
+            <button type="button" className="ody-btn-secondary" style={{ width: '100%' }}
+              onClick={() => navigate(`${ROUTES.AUJOURDHUI}?day=${WEEK_DAYS.find(d => d.idx === selectedIdx)?.sessionDay || ''}`)}>
+              REVOIR LA SÉANCE
+            </button>
+          ) : (
+            <button type="button" className="ody-btn-secondary" style={{ width: '100%' }}
+              onClick={() => navigate(`${ROUTES.AUJOURDHUI}?day=${WEEK_DAYS.find(d => d.idx === selectedIdx)?.sessionDay || ''}`)}>
+              VOIR LA SÉANCE
+            </button>
+          )}
+        </div>
+
+        {/* Distribution attributs */}
+        <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)', marginTop: 'var(--sp-4)' }}>
+          <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block' }}>
+            DISTRIBUTION ATTRIBUTS · S{week}
+          </Inscription>
+          <div style={{ display: 'flex', gap: 'var(--sp-3)' }}>
+            {ATTR_KEYS.map(k => {
+              const info = ATTRIBUTES_INFO[k];
+              const pct = SEED_VOLUME_DIST[k] || 0;
+              return (
+                <div key={k} style={{ flex: 1, textAlign: 'center' }}>
+                  <div style={{ fontFamily: 'var(--font-greek)', fontStyle: 'italic', fontSize: 16, color: info.color, marginBottom: 4 }}>
+                    {info.glyph}
+                  </div>
+                  <div style={{
+                    height: 40, background: 'var(--bg-surface)', borderRadius: 2, position: 'relative', overflow: 'hidden',
+                  }}>
+                    <div style={{
+                      position: 'absolute', bottom: 0, width: '100%', height: `${pct * 100}%`,
+                      background: info.color, opacity: 0.3, borderRadius: 2,
+                    }} />
+                  </div>
+                  <div className="ody-tactical" style={{ fontSize: 10, marginTop: 4, color: 'var(--text-tertiary)' }}>
+                    {Math.round(pct * 100)}%
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     );
   };
 
@@ -4180,257 +4709,296 @@
 
   const HerosPage = () => {
     const [refresh, setRefresh] = useState(0);
-    const streak = useStreak(refresh);
     const heroStats = useHeroStats(refresh);
-    const unlocked = useUnlockedBadges(refresh);
-    const prs = useAllPRs(refresh);
-    // Standards ATHX avec overlay des 1RM déclarés en /reglages — utilisé
-    // uniquement pour l'affichage. Les attributs RPG restent sets-only.
-    const displayStandards = useStandardsDisplay(refresh);
-
-    // Reload à chaque visite (au cas où on vient de unlocker un badge ou battre un PR)
+    const [openAttr, setOpenAttr] = useState(null);
     useEffect(() => { setRefresh(r => r + 1); }, []);
 
+    // Use live data if available, fallback to seed
+    const currentVals = ATTR_KEYS.map(k => SEED_ATTRIBUTES.current[k]);
+    const baselineVals = ATTR_KEYS.map(k => SEED_ATTRIBUTES.baseline[k]);
+
     return (
-      <PageWrap
-        title="Héros"
-        subtitle={
-          <span className="greek" style={{ fontStyle: 'italic' }}>
-            Sthénos · Bia · Pónos · Mètis · Áreté
-          </span>
-        }
-      >
-        {/* Identité : Ω brand mark discret + rang + sessions consécutives */}
-        <HeroAvatar streak={streak} />
-
-        {/* Standards ATHX — la métrique-réponse au Job #2 #1 ("Où en est mon
-            e1RM par rapport au point de départ et à mes objectifs ?").
-            Placée en première position pour porter la hiérarchie. */}
-        {heroStats && (
-          <div style={{ marginTop: 18 }}>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
-              Standards ATHX
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {[...(displayStandards || heroStats.standards)]
-                .sort((a, b) => b.progress - a.progress)
-                .map(std => (
-                  <StandardBar key={std.id} standard={std} bodyweight={heroStats.bodyweight} />
-                ))}
-            </div>
-          </div>
-        )}
-
-        {/* Trajectoire e1RM des 4 lifts principaux — réponse visuelle à
-            "Comment évolue mon e1RM depuis le point de départ ?".
-            Section affichée seulement si au moins un lift a ≥2 points. */}
-        {heroStats && (() => {
-          const trackedLifts = [
-            { id: 'squat',    label: 'Squat'   },
-            { id: 'deadlift', label: 'DL'      },
-            { id: 'bench',    label: 'Bench'   },
-            { id: 'ohp',      label: 'OHP'     },
-          ];
-          const visible = trackedLifts
-            .map(l => ({ ...l, points: heroStats.weeklyE1RMs?.[l.id] || [] }))
-            .filter(l => l.points.length >= 2);
-          if (visible.length === 0) return null;
-          return (
-            <div style={{ marginTop: 22 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
-                e1RM · trajectoire
-              </div>
-              <Card>
-                {visible.map((l, idx) => (
-                  <React.Fragment key={l.id}>
-                    {idx > 0 && (
-                      <div style={{ height: 1, background: 'var(--border-subtle)' }} aria-hidden="true" />
-                    )}
-                    <LiftTrajectory name={l.label} points={l.points} />
-                  </React.Fragment>
-                ))}
-              </Card>
-            </div>
-          );
-        })()}
-
-        {/* Radar des 5 attributs RPG. Le radar EST la lecture des attributs —
-            plus de StatChips redondants. La synthèse numérique est rendue
-            sous le radar en une seule ligne dense. */}
-        {heroStats && (
-          <div style={{ marginTop: 22 }}>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
-              Attributs · Radar
-            </div>
-            <Card>
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <RadarChart axes={heroStats.radar} axesPrev={heroStats.pastRadar} size={260} />
-              </div>
-              {/* Légende du radar comparatif. N'apparaît que si pastRadar
-                  existe (pas d'historique avant la sem 5). */}
-              {heroStats.pastRadar && (
-                <div style={{
-                  marginTop: 8,
-                  display: 'flex',
-                  justifyContent: 'center',
-                  gap: 16,
-                  fontSize: 10,
-                  color: 'var(--text-tertiary)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '1.2px',
-                  fontWeight: 700,
-                }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <span aria-hidden="true" style={{
-                      display: 'inline-block',
-                      width: 14, height: 2,
-                      background: 'var(--accent-laurel)',
-                      borderRadius: 1,
-                    }} />
-                    Actuel · Sem {heroStats.pastAnchorWeek + 4}
-                  </span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <span aria-hidden="true" style={{
-                      display: 'inline-block',
-                      width: 14, height: 0,
-                      borderTop: '1.5px dashed var(--text-tertiary)',
-                    }} />
-                    Sem {heroStats.pastAnchorWeek}
-                  </span>
-                </div>
-              )}
-              {/* Synthèse numérique en ligne dense, plutôt que 5 chips */}
-              <div style={{
-                marginTop: 14,
-                paddingTop: 12,
-                borderTop: '1px solid var(--border-subtle)',
-                display: 'flex',
-                flexWrap: 'wrap',
-                justifyContent: 'center',
-                gap: '6px 14px',
-                fontSize: 12,
-              }}>
-                {heroStats.radar.map(ax => (
-                  <span key={ax.id} style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
-                    <span className="greek" style={{ fontStyle: 'italic', color: 'var(--text-secondary)' }}>{ax.label}</span>
-                    <span style={{ color: 'var(--text-primary)', fontWeight: 800 }}>{Math.round(ax.value * 100)}</span>
-                  </span>
-                ))}
-              </div>
-              {!heroStats.bodyweight && (
-                <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'center' }}>
-                  Saisis ton bodyweight dans Réglages pour activer le radar.
-                </div>
-              )}
-            </Card>
-          </div>
-        )}
-
-        {/* Achievements */}
-        <div style={{ marginTop: 22, marginBottom: 18 }}>
-          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
-            Achievements
+      <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
+        {/* Header tactique */}
+        <div style={{ padding: 'var(--sp-5) 0 var(--sp-3)' }}>
+          <div style={{
+            fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
+            color: 'var(--text-secondary)', letterSpacing: '0.12em', textTransform: 'uppercase',
+          }}>
+            HÉROS · PROFIL
           </div>
           <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(2, 1fr)',
-            gap: 10,
+            fontFamily: 'var(--font-greek)', fontStyle: 'italic', fontSize: 15,
+            color: 'var(--text-tertiary)', marginTop: 4,
           }}>
-            {BADGES.map(badge => {
-              const isUnlocked = unlocked && !!unlocked[badge.id];
-              return (
-                <div
-                  key={badge.id}
-                  style={{
-                    background: 'var(--bg-surface)',
-                    border: `1px solid ${isUnlocked ? 'rgba(232,160,32,0.4)' : 'var(--border-subtle)'}`,
-                    borderRadius: 14,
-                    padding: 12,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: 8,
-                    textAlign: 'center',
-                    opacity: isUnlocked ? 1 : 0.6,
-                  }}
-                >
-                  <BadgeIcon badge={badge} unlocked={isUnlocked} size={48} />
-                  <div style={{
-                    fontSize: 13,
-                    fontWeight: 800,
-                    color: isUnlocked ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  }}>
-                    {badge.name}
+            Sthénos · Bia · Pónos · Mètis · Áreté
+          </div>
+        </div>
+
+        {/* Radar */}
+        <div className="ody-tablet" style={{ padding: 'var(--sp-3)', marginBottom: 'var(--sp-4)', display: 'flex', justifyContent: 'center' }}>
+          <Radar size={280} current={currentVals} baseline={baselineVals} glyph="Α" />
+        </div>
+
+        {/* Attribute strips */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)' }}>
+          {ATTR_KEYS.map(k => {
+            const info = ATTRIBUTES_INFO[k];
+            const val = SEED_ATTRIBUTES.current[k];
+            const base = SEED_ATTRIBUTES.baseline[k];
+            const delta = val - base;
+            const isOpen = openAttr === k;
+            return (
+              <div key={k} className="ody-tablet" style={{ padding: 0, overflow: 'hidden' }}>
+                <div style={{
+                  display: 'grid', gridTemplateColumns: '34px 1fr 28px 50px 1fr',
+                  alignItems: 'center', gap: 'var(--sp-2)',
+                  padding: 'var(--sp-3) var(--sp-4)',
+                }}>
+                  {/* Glyph */}
+                  <span style={{
+                    fontFamily: 'var(--font-greek)', fontStyle: 'italic',
+                    fontSize: 24, color: info.color, textAlign: 'center',
+                  }}>{info.glyph}</span>
+                  {/* Label + desc */}
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{info.label}</div>
                   </div>
-                  {/* Toujours montrer la condition. Pour un badge locked, la
-                      description est la consigne pour l'unlock — c'est ainsi
-                      que l'écran enseigne la mécanique au lieu d'un "?" muet. */}
+                  {/* Info button */}
+                  <button
+                    type="button"
+                    aria-label={`Info ${info.label}`}
+                    onClick={() => setOpenAttr(isOpen ? null : k)}
+                    style={{
+                      width: 24, height: 24, borderRadius: '50%',
+                      background: isOpen ? 'var(--accent-olympus)' : 'transparent',
+                      border: isOpen ? 'none' : '1px solid var(--border-strong)',
+                      color: isOpen ? 'var(--bg-primary)' : 'var(--text-tertiary)',
+                      fontSize: 12, fontWeight: 800, cursor: 'pointer',
+                      display: 'grid', placeItems: 'center',
+                    }}
+                  >i</button>
+                  {/* Value */}
+                  <div className="ody-tactical" style={{ fontSize: 18, fontWeight: 700, textAlign: 'right' }}>
+                    {Math.round(val * 100)}
+                  </div>
+                  {/* Bar + delta */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                    <div style={{
+                      flex: 1, height: 6, background: 'var(--bg-surface)', borderRadius: 3, overflow: 'hidden',
+                    }}>
+                      <div style={{
+                        width: `${val * 100}%`, height: '100%',
+                        background: info.color, borderRadius: 3,
+                      }} />
+                    </div>
+                    <span style={{
+                      fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700,
+                      color: delta > 0 ? 'var(--accent-laurel)' : 'var(--text-tertiary)',
+                    }}>
+                      {delta > 0 ? '+' : ''}{Math.round(delta * 100)}
+                    </span>
+                  </div>
+                </div>
+                {/* Expandable info panel */}
+                {isOpen && (
                   <div style={{
-                    fontSize: 11,
-                    color: 'var(--text-tertiary)',
-                    lineHeight: 1.3,
+                    padding: 'var(--sp-3) var(--sp-4) var(--sp-4)',
+                    borderTop: '1px solid var(--border-subtle)',
+                    animation: 'fade-in var(--d-base) var(--ease-out)',
                   }}>
-                    {badge.description}
+                    <div style={{ marginBottom: 'var(--sp-2)' }}>
+                      <Inscription size="xs" style={{ color: 'var(--accent-olympus)' }}>
+                        {info.label} · DÉCODAGE
+                      </Inscription>
+                      <span className="ody-tactical" style={{ float: 'right', fontSize: 10 }}>
+                        BASE {Math.round(base * 100)} → {Math.round(val * 100)}
+                      </span>
+                    </div>
+                    <div style={{
+                      fontFamily: 'var(--font-greek)', fontStyle: 'italic',
+                      fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 'var(--sp-2)',
+                    }}>
+                      {info.formula}
+                    </div>
+                    <div style={{
+                      fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5,
+                    }}>
+                      {info.advice}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Standards Stele ATHX */}
+        <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-3)' }}>
+          <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block', paddingLeft: 'var(--sp-2)' }}>
+            STÈLE ATHX · STANDARDS
+          </Inscription>
+          <div style={{ display: 'flex', gap: 'var(--sp-2)', justifyContent: 'center' }}>
+            {SEED_ATHX_STANDARDS.map(std => {
+              const lift = SEED_LIFTS.find(l => l.key === std.lift);
+              const pct = Math.min(1, std.ratio / std.targetRatio);
+              const reached = pct >= 1;
+              return (
+                <div key={std.lift} style={{ flex: 1, textAlign: 'center', maxWidth: 60 }}>
+                  {/* Target ratio label */}
+                  <div style={{
+                    fontSize: 9, fontFamily: 'var(--font-mono)', fontWeight: 700,
+                    color: 'var(--accent-olympus)', marginBottom: 4,
+                  }}>×{std.targetRatio}</div>
+                  {/* Stele column */}
+                  <div style={{
+                    height: 120, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+                    borderRadius: 'var(--r-sm)', position: 'relative', overflow: 'hidden',
+                  }}>
+                    {/* Olympus threshold line */}
+                    <div style={{
+                      position: 'absolute', top: 0, left: 0, right: 0,
+                      height: 2, background: 'var(--accent-olympus)',
+                    }} />
+                    {/* Fill */}
+                    <div style={{
+                      position: 'absolute', bottom: 0, left: 0, right: 0,
+                      height: `${pct * 100}%`,
+                      background: reached ? 'var(--accent-olympus)' : 'var(--accent-laurel)',
+                      opacity: 0.3,
+                    }} />
+                    {/* Ratio inside */}
+                    <div style={{
+                      position: 'absolute', bottom: `${pct * 100}%`, left: 0, right: 0,
+                      transform: 'translateY(50%)',
+                      textAlign: 'center', fontFamily: 'var(--font-mono)',
+                      fontSize: 11, fontWeight: 700, color: 'var(--text-primary)',
+                    }}>×{std.ratio.toFixed(1)}</div>
+                  </div>
+                  {/* Label below */}
+                  <div style={{ marginTop: 6 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
+                      {lift ? lift.name.split(' ')[0] : std.lift}
+                    </div>
+                    <div className="ody-tactical" style={{ fontSize: 11, marginTop: 2 }}>
+                      {std.current}kg
+                    </div>
                   </div>
                 </div>
               );
             })}
           </div>
         </div>
+      </div>
+    );
+  };
 
-        {/* Wall of PRs · vue canonique des PR cumulés.
-            Le Mur des Cyclopes (grille étoiles) a été retiré : il dupliquait
-            l'information de cette timeline et fragmentait la lecture. */}
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
-            Wall of PRs · {prs && prs.length > 0 ? `${prs.length} ${prs.length > 1 ? 'vaincus' : 'vaincu'}` : 'timeline'}
+  /* ==========================================================
+     ProgressionPage — E1RM curves per lift, per design handoff
+     Tabs: Squat / Deadlift / Bench / OHP / Row
+     E1RMTotemCard + E1RMCurve + RepairesCard
+     ========================================================== */
+  const ProgressionPage = () => {
+    const [activeLift, setActiveLift] = useState('squat');
+    const lift = SEED_LIFTS.find(l => l.key === activeLift);
+    const lastE1rm = lift ? lift.history[lift.history.length - 1] : 0;
+    const deltaBaseline = lift ? lastE1rm - lift.baseline : 0;
+
+    return (
+      <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
+        {/* Header tactique */}
+        <div style={{ padding: 'var(--sp-5) 0 var(--sp-3)' }}>
+          <div style={{
+            fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
+            color: 'var(--text-secondary)', letterSpacing: '0.12em', textTransform: 'uppercase',
+          }}>
+            PROGRESSION · e1RM
           </div>
-          {prs === null ? (
-            <Card><div style={{ color: 'var(--text-secondary)' }}>Chargement…</div></Card>
-          ) : prs.length === 0 ? (
-            <Card>
-              <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
-                Aucun PR pour l'instant. Bats un e1RM pour voir le mur s'allumer.
-              </div>
-            </Card>
-          ) : (
-            <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {prs.map(pr => (
-                <li key={pr.id} style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  padding: '10px 14px',
-                  background: 'rgba(232,160,32,0.06)',
-                  border: '1px solid rgba(232,160,32,0.3)',
-                  borderRadius: 12,
-                }}>
-                  <span style={{
-                    color: 'var(--accent-olympus)',
-                    fontSize: 16,
-                    fontWeight: 800,
-                  }}>★</span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
-                      {pr.exerciseName}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                      Sem {pr.week} · {pr.weight} kg × {pr.reps} RIR {pr.rir}
-                    </div>
-                  </div>
-                  <div style={{
-                    fontSize: 14,
-                    fontWeight: 800,
-                    color: 'var(--accent-olympus)',
-                  }}>
-                    {pr.e1RM}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
-      </PageWrap>
+
+        {/* Tabs */}
+        <div style={{
+          display: 'flex', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)',
+          overflowX: 'auto', WebkitOverflowScrolling: 'touch',
+        }}>
+          {SEED_LIFTS.map(l => {
+            const active = l.key === activeLift;
+            return (
+              <button key={l.key} type="button" onClick={() => setActiveLift(l.key)}
+                style={{
+                  padding: 'var(--sp-2) var(--sp-4)',
+                  background: active ? 'var(--bg-surface)' : 'transparent',
+                  border: active ? '1px solid var(--accent-laurel)' : '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--r-md)',
+                  color: active ? 'var(--accent-laurel)' : 'var(--text-tertiary)',
+                  fontSize: 12, fontWeight: 700, textTransform: 'uppercase',
+                  letterSpacing: '0.08em', cursor: 'pointer', whiteSpace: 'nowrap',
+                  fontFamily: 'var(--font-sans)',
+                }}>
+                {l.key === 'squat' ? 'Squat' : l.key === 'ohp' ? 'OHP' : l.name.split(' ')[0]}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* E1RM Totem Card */}
+        {lift && (
+          <div className="ody-tablet ody-meander" style={{ padding: 'var(--sp-4) var(--sp-5)', marginBottom: 'var(--sp-4)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--sp-3)' }}>
+              <div>
+                <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>{lift.name}</Inscription>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
+                  <Totem size={40} color="var(--accent-laurel)">{lastE1rm}</Totem>
+                  <span className="ody-tactical" style={{ fontSize: 13 }}>kg · S5</span>
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>VS BASELINE</Inscription>
+                <div style={{
+                  fontSize: 16, fontWeight: 800, marginTop: 4,
+                  color: deltaBaseline > 0 ? 'var(--accent-laurel)' : 'var(--text-primary)',
+                  fontFamily: 'var(--font-mono)',
+                }}>
+                  {deltaBaseline > 0 ? '+' : ''}{deltaBaseline} kg
+                </div>
+              </div>
+            </div>
+            <E1RMCurve liftKey={activeLift} width={360} height={220} />
+          </div>
+        )}
+
+        {/* Repaires Card */}
+        {lift && (
+          <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)' }}>
+            <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block' }}>
+              REPÈRES · {lift.name.toUpperCase()}
+            </Inscription>
+            {[
+              { label: 'Record absolu', value: lift.record, color: 'var(--accent-olympus)', hint: 'Plus haut e1RM atteint' },
+              { label: 'e1RM actuel', value: lastE1rm, color: 'var(--accent-laurel)', hint: 'Dernière valeur S5' },
+              { label: 'Baseline', value: lift.baseline, color: 'var(--text-tertiary)', hint: 'Point de départ S1' },
+            ].map((rep, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+                padding: 'var(--sp-3) 0',
+                borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none',
+              }}>
+                <div style={{
+                  width: 24, display: 'flex', alignItems: 'center',
+                }}>
+                  <div style={{ width: '100%', height: 0, borderTop: `2px ${i === 2 ? 'dashed' : 'solid'} ${rep.color}` }} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: rep.color }}>{rep.label}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{rep.hint}</div>
+                </div>
+                <Totem size={24} color={rep.color}>{rep.value}</Totem>
+                <span className="ody-tactical" style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>kg</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     );
   };
 
@@ -4886,15 +5454,15 @@
       <SeedContext.Provider value={seedTick}>
         <HashRouter>
           <div className="app-shell">
-            <AppHeader />
             <main className="app-main">
               <Routes>
-                <Route path={ROUTES.AUJOURDHUI} element={<AujourdhuiPage />} />
-                <Route path={ROUTES.SEMAINE}    element={<SemainePage />} />
-                <Route path={ROUTES.HEROS}      element={<HerosPage />} />
-                <Route path={ROUTES.CARTE}      element={<CartePage />} />
-                <Route path={ROUTES.STATS}      element={<HerosPage />} />
-                <Route path={ROUTES.REGLAGES}   element={<ReglagesPage />} />
+                <Route path={ROUTES.AUJOURDHUI}  element={<AujourdhuiPage />} />
+                <Route path={ROUTES.SEMAINE}     element={<SemainePage />} />
+                <Route path={ROUTES.HEROS}       element={<HerosPage />} />
+                <Route path={ROUTES.PROGRESSION} element={<ProgressionPage />} />
+                <Route path={ROUTES.CARTE}       element={<CartePage />} />
+                <Route path={ROUTES.STATS}       element={<HerosPage />} />
+                <Route path={ROUTES.REGLAGES}    element={<ReglagesPage />} />
                 <Route path="*" element={<AujourdhuiPage />} />
               </Routes>
             </main>
