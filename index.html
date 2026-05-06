@@ -4814,39 +4814,31 @@
             const isOpen = openAttr === k;
             return (
               <div key={k} className="ody-tablet" style={{ padding: 0, overflow: 'hidden' }}>
-                <div style={{
-                  display: 'grid', gridTemplateColumns: '34px 1fr 28px 50px 1fr',
-                  alignItems: 'center', gap: 'var(--sp-2)',
-                  padding: 'var(--sp-3) var(--sp-4)',
-                }}>
+                <button
+                  type="button"
+                  aria-label={`Info ${info.label}`}
+                  onClick={() => setOpenAttr(isOpen ? null : k)}
+                  style={{
+                    width: '100%', background: 'transparent', border: 'none', cursor: 'pointer',
+                    display: 'grid', gridTemplateColumns: '34px 1fr auto 1fr',
+                    alignItems: 'center', gap: 'var(--sp-3)',
+                    padding: 'var(--sp-3) var(--sp-4)',
+                  }}>
                   {/* Glyph */}
                   <span style={{
                     fontFamily: 'var(--font-greek)', fontStyle: 'italic',
                     fontSize: 24, color: info.color, textAlign: 'center',
                   }}>{info.glyph}</span>
-                  {/* Label + desc */}
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{info.label}</div>
+                  {/* Label + ⓘ inline */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{info.label}</span>
+                    <span style={{
+                      fontSize: 11, color: isOpen ? 'var(--accent-olympus)' : 'var(--text-tertiary)',
+                      opacity: isOpen ? 1 : 0.4,
+                    }}>ⓘ</span>
                   </div>
-                  {/* Info button */}
-                  <button
-                    type="button"
-                    aria-label={`Info ${info.label}`}
-                    onClick={() => setOpenAttr(isOpen ? null : k)}
-                    style={{
-                      width: 20, height: 20,
-                      background: 'transparent',
-                      border: 'none',
-                      color: isOpen ? 'var(--accent-olympus)' : 'var(--text-tertiary)',
-                      fontSize: 13, cursor: 'pointer',
-                      display: 'grid', placeItems: 'center', lineHeight: 1,
-                      opacity: isOpen ? 1 : 0.45,
-                      padding: 0,
-                      fontFamily: 'var(--font-greek)', fontStyle: 'italic',
-                    }}
-                  >ⓘ</button>
                   {/* Value */}
-                  <div className="ody-tactical" style={{ fontSize: 18, fontWeight: 700, textAlign: 'right' }}>
+                  <div className="ody-tactical" style={{ fontSize: 18, fontWeight: 700, textAlign: 'right', color: 'var(--text-primary)' }}>
                     {Math.round(val * 100)}
                   </div>
                   {/* Bar + delta */}
@@ -4866,7 +4858,7 @@
                       {delta > 0 ? '+' : ''}{Math.round(delta * 100)}
                     </span>
                   </div>
-                </div>
+                </button>
                 {/* Expandable info panel */}
                 {isOpen && (
                   <div style={{
