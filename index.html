@@ -1514,63 +1514,82 @@
     </div>
   );
 
-  // E1RMCurve — courbe 20 semaines pour /progression
-  const E1RMCurve = ({ liftKey, width = 328, height = 220 }) => {
+  // E1RMCurve — courbe lissée 20 semaines pour /progression
+  const E1RMCurve = ({ liftKey, width = 328, height = 200 }) => {
     const lift = SEED_LIFTS.find(l => l.key === liftKey);
     if (!lift) return null;
     const { baseline, record, history } = lift;
     const totalWeeks = 20;
-    const padL = 30, padR = 10, padT = 20, padB = 30;
+    const padL = 36, padR = 16, padT = 24, padB = 32;
     const chartW = width - padL - padR;
     const chartH = height - padT - padB;
     const allVals = [baseline, record, ...history];
-    const minV = Math.min(...allVals) - 10;
-    const maxV = Math.max(...allVals) + 10;
+    const minV = Math.min(...allVals) - 5;
+    const maxV = Math.max(...allVals) + 5;
     const xOf = (w) => padL + (w / totalWeeks) * chartW;
     const yOf = (v) => padT + chartH - ((v - minV) / (maxV - minV)) * chartH;
 
-    const points = history.map((v, i) => `${xOf(i + 1)},${yOf(v)}`).join(' ');
-    const lastPt = history.length > 0 ? { x: xOf(history.length), y: yOf(history[history.length - 1]) } : null;
+    // Smooth cubic bezier path through data points
+    const pts = history.map((v, i) => ({ x: xOf(i + 1), y: yOf(v) }));
+    let curvePath = '';
+    if (pts.length >= 2) {
+      curvePath = `M${pts[0].x},${pts[0].y}`;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p0 = pts[Math.max(0, i - 1)];
+        const p1 = pts[i];
+        const p2 = pts[i + 1];
+        const p3 = pts[Math.min(pts.length - 1, i + 2)];
+        const tension = 0.3;
+        const cp1x = p1.x + (p2.x - p0.x) * tension;
+        const cp1y = p1.y + (p2.y - p0.y) * tension;
+        const cp2x = p2.x - (p3.x - p1.x) * tension;
+        const cp2y = p2.y - (p3.y - p1.y) * tension;
+        curvePath += ` C${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.x},${p2.y}`;
+      }
+    }
 
-    // Zone de progression (area fill)
-    const areaPath = history.length > 1
-      ? `M${xOf(1)},${yOf(baseline)} ` + history.map((v, i) => `L${xOf(i + 1)},${yOf(v)}`).join(' ') + ` L${xOf(history.length)},${yOf(baseline)} Z`
+    // Area fill path (smooth curve down to baseline)
+    const areaPath = pts.length >= 2
+      ? curvePath + ` L${pts[pts.length - 1].x},${yOf(baseline)} L${pts[0].x},${yOf(baseline)} Z`
       : '';
 
+    const lastPt = pts.length > 0 ? pts[pts.length - 1] : null;
     const ticks = [1, 5, 10, 15, 20];
 
     return (
-      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-        {/* Zone fill */}
+      <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
+        {/* Area fill — subtle */}
         {areaPath && <path d={areaPath} fill="var(--viz-zone)" />}
         {/* Baseline dashed */}
         <line x1={padL} y1={yOf(baseline)} x2={width - padR} y2={yOf(baseline)}
-          stroke="var(--viz-baseline)" strokeWidth="1" strokeDasharray="4 3" />
+          stroke="var(--text-quaternary)" strokeWidth="0.8" strokeDasharray="4 4" />
         {/* Record dashed */}
         <line x1={padL} y1={yOf(record)} x2={width - padR} y2={yOf(record)}
-          stroke="var(--viz-record)" strokeWidth="1" strokeDasharray="4 3" />
-        {/* Courbe */}
-        <polyline points={points} fill="none" stroke="var(--viz-current)" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
-        {/* Points */}
-        {history.map((v, i) => (
-          <circle key={i} cx={xOf(i + 1)} cy={yOf(v)} r={i === history.length - 1 ? 3.5 : 2}
-            fill={i === history.length - 1 ? 'var(--viz-record)' : 'var(--viz-current)'}
-            stroke={i === history.length - 1 ? 'var(--viz-record)' : 'none'} strokeWidth="1.5" />
+          stroke="var(--accent-olympus)" strokeWidth="0.8" strokeDasharray="4 4" opacity="0.5" />
+        {/* Smooth curve */}
+        {curvePath && <path d={curvePath} fill="none" stroke="var(--viz-current)" strokeWidth="1.8" strokeLinecap="round" />}
+        {/* Data points — small, last one bigger */}
+        {pts.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y}
+            r={i === pts.length - 1 ? 4 : 2}
+            fill={i === pts.length - 1 ? 'var(--accent-olympus)' : 'var(--viz-current)'}
+            stroke={i === pts.length - 1 ? 'var(--bg-primary)' : 'none'}
+            strokeWidth={i === pts.length - 1 ? 1.5 : 0} />
         ))}
-        {/* Ticks X */}
+        {/* X ticks */}
         {ticks.map(w => (
           <text key={w} x={xOf(w)} y={height - 8} textAnchor="middle"
             fontSize="9" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">S{w}</text>
         ))}
         {/* Baseline label */}
-        <text x={padL - 4} y={yOf(baseline)} textAnchor="end" dominantBaseline="middle"
+        <text x={padL - 6} y={yOf(baseline)} textAnchor="end" dominantBaseline="middle"
           fontSize="9" fontFamily="var(--font-mono)" fill="var(--text-tertiary)">{baseline}</text>
         {/* Record label */}
-        <text x={padL - 4} y={yOf(record)} textAnchor="end" dominantBaseline="middle"
-          fontSize="9" fontFamily="var(--font-mono)" fill="var(--accent-olympus)">{record}</text>
-        {/* PR annotation */}
+        <text x={padL - 6} y={yOf(record)} textAnchor="end" dominantBaseline="middle"
+          fontSize="9" fontFamily="var(--font-mono)" fill="var(--accent-olympus)" opacity="0.7">{record}</text>
+        {/* PR annotation on last point */}
         {lastPt && (
-          <text x={lastPt.x + 8} y={lastPt.y - 8}
+          <text x={lastPt.x + 10} y={lastPt.y - 6}
             fontSize="11" fontFamily="var(--font-greek)" fontStyle="italic" fill="var(--accent-olympus)">
             PR {history[history.length - 1]}
           </text>
@@ -4943,7 +4962,7 @@
 
         {/* E1RM Totem Card */}
         {lift && (
-          <div className="ody-tablet ody-meander" style={{ padding: 'var(--sp-4) var(--sp-5)', marginBottom: 'var(--sp-4)' }}>
+          <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)', marginBottom: 'var(--sp-4)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--sp-3)' }}>
               <div>
                 <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>{lift.name}</Inscription>
