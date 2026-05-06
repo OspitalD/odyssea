@@ -4834,16 +4834,17 @@
                     aria-label={`Info ${info.label}`}
                     onClick={() => setOpenAttr(isOpen ? null : k)}
                     style={{
-                      width: 16, height: 16, borderRadius: '50%',
-                      background: isOpen ? 'var(--accent-olympus)' : 'transparent',
-                      border: isOpen ? 'none' : '1px solid var(--text-tertiary)',
-                      color: isOpen ? 'var(--bg-primary)' : 'var(--text-tertiary)',
-                      fontSize: 9, fontWeight: 600, cursor: 'pointer',
+                      width: 20, height: 20,
+                      background: 'transparent',
+                      border: 'none',
+                      color: isOpen ? 'var(--accent-olympus)' : 'var(--text-tertiary)',
+                      fontSize: 13, cursor: 'pointer',
                       display: 'grid', placeItems: 'center', lineHeight: 1,
-                      opacity: isOpen ? 1 : 0.5,
+                      opacity: isOpen ? 1 : 0.45,
                       padding: 0,
+                      fontFamily: 'var(--font-greek)', fontStyle: 'italic',
                     }}
-                  >i</button>
+                  >ⓘ</button>
                   {/* Value */}
                   <div className="ody-tactical" style={{ fontSize: 18, fontWeight: 700, textAlign: 'right' }}>
                     {Math.round(val * 100)}
