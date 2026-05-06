@@ -1637,8 +1637,8 @@
   const NAV_ITEMS = [
     { id: 'aujourdhui',  to: ROUTES.AUJOURDHUI,  label: "Aujourd'hui" },
     { id: 'semaine',     to: ROUTES.SEMAINE,      label: 'Semaine' },
-    { id: 'heros',       to: ROUTES.HEROS,        label: 'Heros' },
-    { id: 'progression', to: ROUTES.PROGRESSION,  label: 'Progression' },
+    { id: 'heros',       to: ROUTES.HEROS,        label: 'Héros' },
+    { id: 'reglages',    to: ROUTES.REGLAGES,     label: 'Réglages' },
   ];
 
   const BottomNav = () => {
@@ -1914,8 +1914,7 @@
 
     const Screen = ({ children, ctaLabel = 'Suivant', onCta, ctaDisabled = false, skipLabel, onSkip }) => (
       <div style={{
-        position: 'fixed', inset: 0,
-        zIndex: 200,
+        minHeight: '100vh',
         background: 'var(--bg-primary)',
         display: 'flex', flexDirection: 'column',
         padding: '40px 24px 32px',
@@ -4730,7 +4729,11 @@
     const [refresh, setRefresh] = useState(0);
     const heroStats = useHeroStats(refresh);
     const [openAttr, setOpenAttr] = useState(null);
+    const [activeLift, setActiveLift] = useState('squat');
     useEffect(() => { setRefresh(r => r + 1); }, []);
+    const progLift = SEED_LIFTS.find(l => l.key === activeLift);
+    const progLastE1rm = progLift ? progLift.history[progLift.history.length - 1] : 0;
+    const progDelta = progLift ? progLastE1rm - progLift.baseline : 0;
 
     // Use live data if available, fallback to seed
     const currentVals = ATTR_KEYS.map(k => SEED_ATTRIBUTES.current[k]);
@@ -5469,6 +5472,8 @@
       setShowSplash(false);
     };
 
+    if (showSplash) return <Onboarding onComplete={dismissSplash} />;
+
     return (
       <SeedContext.Provider value={seedTick}>
         <HashRouter>
@@ -5487,7 +5492,6 @@
             </main>
             <BottomNav />
           </div>
-          {showSplash && <Splash onDismiss={dismissSplash} />}
         </HashRouter>
       </SeedContext.Provider>
     );
