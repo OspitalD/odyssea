@@ -4043,25 +4043,33 @@
      Phase 2B : état C (séance) + état D (récap).
      ========================================================== */
   const BLOCK_TYPES = [
-    { type: 'aerobic',  label: 'Aérobie',  accent: 'var(--accent-laurel)' },
-    { type: 'strength', label: 'Renfo',    accent: 'var(--accent-olympus)' },
-    { type: 'iso',      label: 'Isométrie', accent: 'var(--text-secondary)' },
+    { type: 'aerobic',   label: 'Aérobie',    accent: 'var(--accent-laurel)' },
+    { type: 'strength',  label: 'Renfo',      accent: 'var(--accent-olympus)' },
+    { type: 'iso',       label: 'Isométrie',  accent: 'var(--text-secondary)' },
+    { type: 'anaerobic', label: 'Anaérobie',   accent: 'var(--accent-blood)' },
+    { type: 'plyo',      label: 'Plyo',       accent: 'var(--accent-olympus)' },
+    { type: 'sprint',    label: 'Sprint',     accent: 'var(--accent-laurel)' },
   ];
+  const BLOCK_TYPES_BY_DAY = {
+    Tuesday:  ['aerobic', 'strength', 'iso'],
+    Thursday: ['anaerobic', 'plyo', 'sprint'],
+  };
 
   const BLOCK_DEFAULTS_BY_DAY = {
     Tuesday: {
-      aerobic:  { exerciseName: 'Run', mode: 'Run', durationMinutesTarget: 30, rpeTarget: 7 },
+      aerobic:  { exerciseName: 'Run', mode: 'Steady Run', durationMinutesTarget: 30, rpeTarget: 7 },
       strength: { exerciseName: 'Hammer Curl', setsTarget: 3, repsTarget: 12, weightTarget: null },
       iso:      { exerciseName: 'Plank', durationSecondsTarget: 60, roundsTarget: 3 },
     },
     Thursday: {
-      aerobic:  { exerciseName: 'Sprints', mode: 'Run', durationMinutesTarget: 20, rpeTarget: 8 },
-      strength: { exerciseName: 'Burpees', setsTarget: 4, repsTarget: 10, weightTarget: null },
-      iso:      { exerciseName: 'HIIT', durationSecondsTarget: 30, roundsTarget: 8 },
+      anaerobic: { exerciseName: 'Shuttle Runs', mode: 'Shuttle Runs', durationMinutesTarget: 15, rpeTarget: 9 },
+      plyo:      { exerciseName: '', laterality: 'bilateral', setsTarget: 4, repsTarget: 5 },
+      sprint:    { exerciseName: 'Sprints', distanceYards: 12, repsTarget: 8, restSecondsTarget: 60 },
     },
   };
 
-  const AEROBIC_MODES = ['Run', 'Bike', 'Row', 'Walk', 'Other'];
+  const AEROBIC_MODES = ['Steady Run', 'Steady Bike', 'Steady Walk', 'Tempo Run', 'Other'];
+  const ANAEROBIC_MODES = ['HIIT Bike', 'Shuttle Runs', 'Float-Fly Sprints', 'Submax Sprints', 'Other'];
 
   let udBlockId = 0;
   const nextUdBlockId = () => ++udBlockId;
@@ -4167,62 +4175,78 @@
             <UdStepper label="Rounds" value={block.roundsTarget} onChange={v => set('roundsTarget', v)} min={1} max={10} step={1} />
           </>
         )}
+
+        {block.type === 'anaerobic' && (
+          <>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>
+                MODE
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {ANAEROBIC_MODES.map(m => (
+                  <button key={m} type="button" onClick={() => set('mode', m)}
+                    style={{
+                      flex: '1 1 auto', minHeight: 44, fontSize: 11, fontWeight: 700,
+                      background: block.mode === m ? 'var(--accent-blood)' : 'var(--bg-primary)',
+                      color: block.mode === m ? 'var(--bg-primary)' : 'var(--text-secondary)',
+                      border: `1px solid ${block.mode === m ? 'var(--accent-blood)' : 'var(--border-strong)'}`,
+                      borderRadius: 8, cursor: 'pointer', padding: '0 8px',
+                    }}>{m}</button>
+                ))}
+              </div>
+            </div>
+            <UdStepper label="Durée cible" value={block.durationMinutesTarget} onChange={v => set('durationMinutesTarget', v)} min={5} max={120} step={5} unit="min" />
+            <UdStepper label="RPE cible" value={block.rpeTarget} onChange={v => set('rpeTarget', v)} min={1} max={10} step={1} />
+          </>
+        )}
+
+        {block.type === 'plyo' && (
+          <>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>
+                LATÉRALITÉ
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {['bilateral', 'unilateral'].map(l => (
+                  <button key={l} type="button" onClick={() => set('laterality', l)}
+                    style={{
+                      flex: 1, minHeight: 44, fontSize: 12, fontWeight: 700,
+                      background: block.laterality === l ? 'var(--accent-olympus)' : 'var(--bg-primary)',
+                      color: block.laterality === l ? 'var(--bg-primary)' : 'var(--text-secondary)',
+                      border: `1px solid ${block.laterality === l ? 'var(--accent-olympus)' : 'var(--border-strong)'}`,
+                      borderRadius: 8, cursor: 'pointer',
+                    }}>{l === 'bilateral' ? 'BI' : 'UNI'}</button>
+                ))}
+              </div>
+            </div>
+            <UdStepper label="Séries" value={block.setsTarget} onChange={v => set('setsTarget', v)} min={1} max={10} step={1} />
+            <UdStepper label="Répétitions" value={block.repsTarget} onChange={v => set('repsTarget', v)} min={1} max={30} step={1} />
+          </>
+        )}
+
+        {block.type === 'sprint' && (
+          <>
+            <UdStepper label="Distance" value={block.distanceYards} onChange={v => set('distanceYards', v)} min={5} max={100} step={1} unit="yards" />
+            <UdStepper label="Reps" value={block.repsTarget} onChange={v => set('repsTarget', v)} min={1} max={20} step={1} />
+            <UdStepper label="Repos" value={block.restSecondsTarget} onChange={v => set('restSecondsTarget', v)} min={15} max={180} step={5} unit="s" />
+          </>
+        )}
       </Card>
     );
   };
 
   const udBlockSummary = (block) => {
     if (block.type === 'aerobic') return `${block.exerciseName} · ${block.mode} · ${block.durationMinutesTarget} min · RPE ${block.rpeTarget}`;
+    if (block.type === 'anaerobic') return `${block.exerciseName} · ${block.mode} · ${block.durationMinutesTarget} min · RPE ${block.rpeTarget}`;
     if (block.type === 'strength') {
       let s = `${block.exerciseName} · ${block.setsTarget}×${block.repsTarget}`;
       if (block.weightTarget) s += ` @ ${block.weightTarget}kg`;
       return s;
     }
     if (block.type === 'iso') return `${block.exerciseName} · ${block.roundsTarget} × ${block.durationSecondsTarget}s`;
+    if (block.type === 'plyo') return `${block.exerciseName || '—'} · ${block.laterality === 'unilateral' ? 'UNI' : 'BI'} · ${block.setsTarget}×${block.repsTarget}`;
+    if (block.type === 'sprint') return `${block.exerciseName} · ${block.repsTarget}×${block.distanceYards}y · ${block.restSecondsTarget}s rest`;
     return block.exerciseName || '?';
-  };
-
-  const UdAerobicInput = ({ blk, blockIdx, sets, onValidated }) => {
-    const existing = sets.find(s => s.exerciseSlot === blockIdx && s.format === 'aerobic');
-    const [dur, setDur] = useState(existing?.durationMinutes ?? blk.durationMinutesTarget);
-    const [rpe, setRpe] = useState(existing?.rpe ?? blk.rpeTarget);
-    const [done, setDone] = useState(!!existing);
-
-    const validate = async () => {
-      if (existing) await db.sets.delete(existing.id);
-      await db.sets.add({
-        week: getCurrentWeek(), sessionDay: blk._sessionDay, exerciseSlot: blockIdx,
-        setNumber: 1, format: 'aerobic', exerciseName: blk.exerciseName,
-        durationMinutes: dur, rpe, completedAt: new Date().toISOString(), syncedAt: null,
-      });
-      setDone(true);
-      onValidated();
-    };
-    const redo = async () => {
-      if (existing) await db.sets.delete(existing.id);
-      setDone(false);
-      onValidated();
-    };
-
-    if (done) return (
-      <Card style={{ padding: '16px' }}>
-        <div style={{ fontSize: 11, color: 'var(--accent-laurel)', fontWeight: 700, letterSpacing: '0.1em', marginBottom: 8 }}>VALIDÉ</div>
-        <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)' }}>{dur} min · RPE {rpe}</div>
-        <button type="button" onClick={redo} style={{
-          marginTop: 12, width: '100%', minHeight: 48, fontSize: 12, fontWeight: 700,
-          background: 'transparent', border: '1px solid var(--border-strong)',
-          borderRadius: 10, color: 'var(--text-secondary)', cursor: 'pointer',
-        }}>REFAIRE</button>
-      </Card>
-    );
-    return (
-      <Card style={{ padding: '16px' }}>
-        <UdStepper label="Durée réelle" value={dur} onChange={setDur} min={1} max={180} step={1} unit="min" />
-        <UdStepper label="RPE ressenti" value={rpe} onChange={setRpe} min={1} max={10} step={1} />
-        <button type="button" onClick={validate} className="ody-btn-primary"
-          style={{ width: '100%', minHeight: 56, marginTop: 8 }}>VALIDER</button>
-      </Card>
-    );
   };
 
   const UdStrengthInput = ({ blk, blockIdx, sets, onValidated }) => {
@@ -4318,6 +4342,149 @@
         <UdStepper label="Durée" value={dur} onChange={setDur} min={5} max={600} step={5} unit="s" />
         <button type="button" onClick={validateRound} className="ody-btn-primary"
           style={{ width: '100%', minHeight: 56, marginTop: 8 }}>VALIDER ROUND</button>
+      </Card>
+    );
+  };
+
+  const UdConditioningInput = ({ blk, blockIdx, sets, onValidated, format }) => {
+    const existing = sets.find(s => s.exerciseSlot === blockIdx && s.format === format);
+    const [dur, setDur] = useState(existing?.durationMinutes ?? blk.durationMinutesTarget);
+    const [rpe, setRpe] = useState(existing?.rpe ?? blk.rpeTarget);
+    const [done, setDone] = useState(!!existing);
+
+    const validate = async () => {
+      if (existing) await db.sets.delete(existing.id);
+      await db.sets.add({
+        week: getCurrentWeek(), sessionDay: blk._sessionDay, exerciseSlot: blockIdx,
+        setNumber: 1, format, exerciseName: blk.exerciseName,
+        durationMinutes: dur, rpe, completedAt: new Date().toISOString(), syncedAt: null,
+      });
+      setDone(true);
+      onValidated();
+    };
+    const redo = async () => {
+      if (existing) await db.sets.delete(existing.id);
+      setDone(false);
+      onValidated();
+    };
+
+    if (done) return (
+      <Card style={{ padding: '16px' }}>
+        <div style={{ fontSize: 11, color: 'var(--accent-laurel)', fontWeight: 700, letterSpacing: '0.1em', marginBottom: 8 }}>VALIDÉ</div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)' }}>{dur} min · RPE {rpe}</div>
+        <button type="button" onClick={redo} style={{
+          marginTop: 12, width: '100%', minHeight: 48, fontSize: 12, fontWeight: 700,
+          background: 'transparent', border: '1px solid var(--border-strong)',
+          borderRadius: 10, color: 'var(--text-secondary)', cursor: 'pointer',
+        }}>REFAIRE</button>
+      </Card>
+    );
+    return (
+      <Card style={{ padding: '16px' }}>
+        <UdStepper label="Durée réelle" value={dur} onChange={setDur} min={1} max={180} step={1} unit="min" />
+        <UdStepper label="RPE ressenti" value={rpe} onChange={setRpe} min={1} max={10} step={1} />
+        <button type="button" onClick={validate} className="ody-btn-primary"
+          style={{ width: '100%', minHeight: 56, marginTop: 8 }}>VALIDER</button>
+      </Card>
+    );
+  };
+
+  const UdPlyoInput = ({ blk, blockIdx, sets, onValidated }) => {
+    const blockSets = sets.filter(s => s.exerciseSlot === blockIdx && s.format === 'plyo')
+      .sort((a, b) => a.setNumber - b.setNumber);
+    const [reps, setReps] = useState(blk.repsTarget);
+
+    const validateSet = async () => {
+      const setNumber = blockSets.length + 1;
+      await db.sets.add({
+        week: getCurrentWeek(), sessionDay: blk._sessionDay, exerciseSlot: blockIdx,
+        setNumber, format: 'plyo', exerciseName: blk.exerciseName,
+        reps, laterality: blk.laterality,
+        completedAt: new Date().toISOString(), syncedAt: null,
+      });
+      onValidated();
+    };
+    const removeLastSet = async () => {
+      const last = blockSets[blockSets.length - 1];
+      if (!last) return;
+      await db.sets.delete(last.id);
+      onValidated();
+    };
+
+    return (
+      <Card style={{ padding: '16px' }}>
+        {blockSets.length > 0 && (
+          <div style={{ marginBottom: 14, borderBottom: '1px solid var(--border-subtle)', paddingBottom: 10 }}>
+            {blockSets.map(s => (
+              <div key={s.id} style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 4, display: 'flex', gap: 8 }}>
+                <span style={{ color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>S{s.setNumber}</span>
+                <span>{s.reps} reps</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.1em', marginBottom: 8 }}>
+          SET {blockSets.length + 1}{blockSets.length < blk.setsTarget ? ` / ${blk.setsTarget}` : ' (bonus)'}
+        </div>
+        <UdStepper label="Reps" value={reps} onChange={setReps} min={1} max={30} step={1} />
+        <button type="button" onClick={validateSet} className="ody-btn-primary"
+          style={{ width: '100%', minHeight: 56, marginTop: 8 }}>VALIDER SET</button>
+        {blockSets.length > 0 && (
+          <button type="button" onClick={removeLastSet} style={{
+            width: '100%', minHeight: 44, marginTop: 8, fontSize: 12, fontWeight: 700,
+            background: 'transparent', border: '1px solid var(--accent-blood)',
+            borderRadius: 10, color: 'var(--accent-blood)', cursor: 'pointer',
+          }}>RETIRER LE DERNIER SET</button>
+        )}
+      </Card>
+    );
+  };
+
+  const UdSprintInput = ({ blk, blockIdx, sets, onValidated }) => {
+    const blockSets = sets.filter(s => s.exerciseSlot === blockIdx && s.format === 'sprint')
+      .sort((a, b) => a.setNumber - b.setNumber);
+
+    const validateRep = async () => {
+      const setNumber = blockSets.length + 1;
+      await db.sets.add({
+        week: getCurrentWeek(), sessionDay: blk._sessionDay, exerciseSlot: blockIdx,
+        setNumber, format: 'sprint', exerciseName: blk.exerciseName,
+        reps: 1, distanceYards: blk.distanceYards,
+        completedAt: new Date().toISOString(), syncedAt: null,
+      });
+      onValidated();
+    };
+    const removeLastRep = async () => {
+      const last = blockSets[blockSets.length - 1];
+      if (!last) return;
+      await db.sets.delete(last.id);
+      onValidated();
+    };
+
+    return (
+      <Card style={{ padding: '16px' }}>
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.1em', marginBottom: 12 }}>
+          {blockSets.length} / {blk.repsTarget} REPS · {blk.distanceYards}y · {blk.restSecondsTarget}s rest
+        </div>
+        {blockSets.length > 0 && (
+          <div style={{ marginBottom: 14, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {blockSets.map(s => (
+              <span key={s.id} style={{
+                fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 700,
+                color: 'var(--accent-laurel)', letterSpacing: '0.08em',
+              }}>REP {s.setNumber} ✓</span>
+            ))}
+          </div>
+        )}
+        <button type="button" onClick={validateRep} className="ody-btn-primary"
+          style={{ width: '100%', minHeight: 56, marginTop: 8 }}>VALIDER REP</button>
+        {blockSets.length > 0 && (
+          <button type="button" onClick={removeLastRep} style={{
+            width: '100%', minHeight: 44, marginTop: 8, fontSize: 12, fontWeight: 700,
+            background: 'transparent', border: '1px solid var(--accent-blood)',
+            borderRadius: 10, color: 'var(--accent-blood)', cursor: 'pointer',
+          }}>RETIRER LA DERNIÈRE REP</button>
+        )}
       </Card>
     );
   };
@@ -4506,11 +4673,13 @@
       // Compute recap stats
       const strengthSets = setsToSync.filter(s => s.format === 'strength');
       const volKg = strengthSets.reduce((a, s) => a + (s.weight || 0) * (s.reps || 0), 0);
-      const aerobicMin = setsToSync.filter(s => s.format === 'aerobic').reduce((a, s) => a + (s.durationMinutes || 0), 0);
+      const conditioningMin = setsToSync.filter(s => s.format === 'aerobic' || s.format === 'anaerobic').reduce((a, s) => a + (s.durationMinutes || 0), 0);
       const isoSec = setsToSync.filter(s => s.format === 'iso').reduce((a, s) => a + (s.durationSeconds || 0), 0);
+      const plyoReps = setsToSync.filter(s => s.format === 'plyo').reduce((a, s) => a + (s.reps || 0), 0);
+      const sprintReps = setsToSync.filter(s => s.format === 'sprint').length;
       const rpes = setsToSync.filter(s => s.rpe != null).map(s => s.rpe);
       const avgRpe = rpes.length ? Math.round(rpes.reduce((a, r) => a + r, 0) / rpes.length * 10) / 10 : null;
-      setRecapStats({ volKg, aerobicMin, isoSec, strengthSets: strengthSets.length, avgRpe, totalSets: setsToSync.length });
+      setRecapStats({ volKg, conditioningMin, isoSec, plyoReps, sprintReps, strengthSets: strengthSets.length, avgRpe, totalSets: setsToSync.length });
 
       setEndingSessionId(sessionRowId);
       const phrase = await pickEndPhrase();
@@ -4560,7 +4729,7 @@
                 TYPE DE BLOC
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {BLOCK_TYPES.map(bt => (
+                {BLOCK_TYPES.filter(bt => (BLOCK_TYPES_BY_DAY[sessionDay] || BLOCK_TYPES_BY_DAY.Tuesday).includes(bt.type)).map(bt => (
                   <button key={bt.type} type="button" onClick={() => addBlock(bt.type)}
                     style={{
                       width: '100%', minHeight: 56, fontSize: 14, fontWeight: 800,
@@ -4718,9 +4887,12 @@
             </div>
             <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 16 }}>{udBlockSummary(blk)}</div>
 
-            {blk.type === 'aerobic' && <UdAerobicInput blk={blkWithDay} blockIdx={currentBlockIdx} sets={sessionSets} onValidated={handleInputValidated} />}
+            {blk.type === 'aerobic' && <UdConditioningInput blk={blkWithDay} blockIdx={currentBlockIdx} sets={sessionSets} onValidated={handleInputValidated} format="aerobic" />}
+            {blk.type === 'anaerobic' && <UdConditioningInput blk={blkWithDay} blockIdx={currentBlockIdx} sets={sessionSets} onValidated={handleInputValidated} format="anaerobic" />}
             {blk.type === 'strength' && <UdStrengthInput blk={blkWithDay} blockIdx={currentBlockIdx} sets={sessionSets} onValidated={handleInputValidated} />}
             {blk.type === 'iso' && <UdIsoInput blk={blkWithDay} blockIdx={currentBlockIdx} sets={sessionSets} onValidated={handleInputValidated} />}
+            {blk.type === 'plyo' && <UdPlyoInput blk={blkWithDay} blockIdx={currentBlockIdx} sets={sessionSets} onValidated={handleInputValidated} />}
+            {blk.type === 'sprint' && <UdSprintInput blk={blkWithDay} blockIdx={currentBlockIdx} sets={sessionSets} onValidated={handleInputValidated} />}
 
             <div style={{ height: 200 }} />
           </div>
@@ -4766,16 +4938,28 @@
                     <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>VOLUME KG</Inscription>
                   </div>
                 )}
-                {recapStats.aerobicMin > 0 && (
+                {recapStats.conditioningMin > 0 && (
                   <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
-                    <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800 }}>{recapStats.aerobicMin}</div>
-                    <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>MIN AÉROBIE</Inscription>
+                    <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800 }}>{recapStats.conditioningMin}</div>
+                    <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>MIN CARDIO</Inscription>
                   </div>
                 )}
                 {recapStats.isoSec > 0 && (
                   <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
                     <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800 }}>{recapStats.isoSec}s</div>
                     <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>ISO TOTAL</Inscription>
+                  </div>
+                )}
+                {recapStats.plyoReps > 0 && (
+                  <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+                    <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800 }}>{recapStats.plyoReps}</div>
+                    <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>REPS PLYO</Inscription>
+                  </div>
+                )}
+                {recapStats.sprintReps > 0 && (
+                  <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+                    <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800 }}>{recapStats.sprintReps}</div>
+                    <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>SPRINTS</Inscription>
                   </div>
                 )}
                 {recapStats.totalSets > 0 && (
