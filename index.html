@@ -4048,10 +4048,17 @@
     { type: 'iso',      label: 'Isométrie', accent: 'var(--text-secondary)' },
   ];
 
-  const BLOCK_DEFAULTS = {
-    aerobic:  { exerciseName: 'Run', mode: 'Run', durationMinutesTarget: 30, rpeTarget: 7 },
-    strength: { exerciseName: 'Hammer Curl', setsTarget: 3, repsTarget: 12, weightTarget: null },
-    iso:      { exerciseName: 'Plank', durationSecondsTarget: 60, roundsTarget: 3 },
+  const BLOCK_DEFAULTS_BY_DAY = {
+    Tuesday: {
+      aerobic:  { exerciseName: 'Run', mode: 'Run', durationMinutesTarget: 30, rpeTarget: 7 },
+      strength: { exerciseName: 'Hammer Curl', setsTarget: 3, repsTarget: 12, weightTarget: null },
+      iso:      { exerciseName: 'Plank', durationSecondsTarget: 60, roundsTarget: 3 },
+    },
+    Thursday: {
+      aerobic:  { exerciseName: 'Sprints', mode: 'Run', durationMinutesTarget: 20, rpeTarget: 8 },
+      strength: { exerciseName: 'Burpees', setsTarget: 4, repsTarget: 10, weightTarget: null },
+      iso:      { exerciseName: 'HIIT', durationSecondsTarget: 30, roundsTarget: 8 },
+    },
   };
 
   const AEROBIC_MODES = ['Run', 'Bike', 'Row', 'Walk', 'Other'];
@@ -4394,7 +4401,8 @@
     };
 
     const addBlock = (type) => {
-      const defaults = BLOCK_DEFAULTS[type];
+      const dayDefaults = BLOCK_DEFAULTS_BY_DAY[sessionDay] || BLOCK_DEFAULTS_BY_DAY.Tuesday;
+      const defaults = dayDefaults[type];
       setEditBlocks(prev => [...prev, { ...defaults, type, _id: nextUdBlockId() }]);
       setShowTypeSelector(false);
     };
