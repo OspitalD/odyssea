@@ -644,9 +644,9 @@
 
   const WEEK_DAYS = [
     { idx: 1, fr: 'Lundi',    en: 'Monday',    sessionDay: 'Monday',    label: 'Strength 1',           strength: true  },
-    { idx: 2, fr: 'Mardi',    en: 'Tuesday',   sessionDay: null,        label: 'Aérobie + bras + abs', strength: false },
+    { idx: 2, fr: 'Mardi',    en: 'Tuesday',   sessionDay: 'Tuesday',   label: 'Aérobie + bras + abs',    strength: false, userDefined: true },
     { idx: 3, fr: 'Mercredi', en: 'Wednesday', sessionDay: 'Wednesday', label: 'Strength 2',           strength: true  },
-    { idx: 4, fr: 'Jeudi',    en: 'Thursday',  sessionDay: null,        label: 'Sprints + Anaérobie',  strength: false },
+    { idx: 4, fr: 'Jeudi',    en: 'Thursday',  sessionDay: 'Thursday',  label: 'Sprints + Anaérobie HIIT', strength: false, userDefined: true },
     { idx: 5, fr: 'Vendredi', en: 'Friday',    sessionDay: 'Friday',    label: 'Strength 3',           strength: true  },
     { idx: 6, fr: 'Samedi',   en: 'Saturday',  sessionDay: 'Saturday',  label: 'Upper Body',           strength: true  },
     { idx: 0, fr: 'Dimanche', en: 'Sunday',    sessionDay: null,        label: 'Off / Light',          strength: false },
@@ -804,6 +804,10 @@
     rewards:      '++id, milestoneId, unlockedAt, claimedAt',
     mantrasSeen:  '++id, mantraId, seenAt',
     moods:        '++id, sessionId, loggedAt',
+  });
+
+  db.version(2).stores({
+    userSessionConfigs: 'sessionDay',
   });
 
   // Singleton de protection contre les seeds concurrents au boot.
@@ -3996,13 +4000,381 @@
     </div>
   );
 
+  /* ==========================================================
+     USER-DEFINED SESSION PAGE (P0-D/2)
+     Props : sessionDay ('Tuesday'|'Thursday'), week, block.
+     Phase 2A : état A (config) + état B (preview).
+     Phase 2B : état C (séance) + état D (récap).
+     ========================================================== */
+  const BLOCK_TYPES = [
+    { type: 'aerobic',  label: 'Aérobie',  accent: 'var(--accent-laurel)' },
+    { type: 'strength', label: 'Renfo',    accent: 'var(--accent-olympus)' },
+    { type: 'iso',      label: 'Isométrie', accent: 'var(--text-secondary)' },
+  ];
+
+  const BLOCK_DEFAULTS = {
+    aerobic:  { exerciseName: 'Run', mode: 'Run', durationMinutesTarget: 30, rpeTarget: 7 },
+    strength: { exerciseName: 'Hammer Curl', setsTarget: 3, repsTarget: 12, weightTarget: null },
+    iso:      { exerciseName: 'Plank', durationSecondsTarget: 60, roundsTarget: 3 },
+  };
+
+  const AEROBIC_MODES = ['Run', 'Bike', 'Row', 'Walk', 'Other'];
+
+  let udBlockId = 0;
+  const nextUdBlockId = () => ++udBlockId;
+
+  const UdStepper = ({ label, value, onChange, min, max, step = 1, unit = '' }) => (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>
+        {label}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button type="button" onClick={() => onChange(Math.max(min, value - step))}
+          style={{
+            width: 56, height: 56, fontSize: 22, fontWeight: 800,
+            background: 'var(--bg-primary)', border: '1px solid var(--border-strong)',
+            borderRadius: 10, color: 'var(--text-primary)', cursor: 'pointer',
+          }}>−</button>
+        <div style={{
+          flex: 1, textAlign: 'center', fontSize: 26, fontWeight: 800,
+          color: 'var(--text-primary)', letterSpacing: '-0.5px',
+        }}>
+          {value}<span style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 600, marginLeft: 4 }}>{unit}</span>
+        </div>
+        <button type="button" onClick={() => onChange(Math.min(max, value + step))}
+          style={{
+            width: 56, height: 56, fontSize: 22, fontWeight: 800,
+            background: 'var(--bg-primary)', border: '1px solid var(--border-strong)',
+            borderRadius: 10, color: 'var(--text-primary)', cursor: 'pointer',
+          }}>+</button>
+      </div>
+    </div>
+  );
+
+  const UdBlockEditor = ({ block, onChange, onRemove }) => {
+    const meta = BLOCK_TYPES.find(bt => bt.type === block.type) || BLOCK_TYPES[0];
+    const set = (field, val) => onChange({ ...block, [field]: val });
+    return (
+      <Card style={{ marginBottom: 12, borderColor: meta.accent, borderWidth: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <span style={{
+            fontSize: 9, fontWeight: 700, fontFamily: 'var(--font-mono)',
+            color: meta.accent, letterSpacing: '0.1em', textTransform: 'uppercase',
+            border: `1px solid ${meta.accent}`, borderRadius: 4, padding: '2px 6px',
+          }}>{meta.label}</span>
+          <button type="button" onClick={onRemove} style={{
+            background: 'transparent', border: '1px solid var(--accent-blood)',
+            borderRadius: 8, color: 'var(--accent-blood)', fontSize: 10, fontWeight: 700,
+            padding: '4px 10px', cursor: 'pointer', letterSpacing: '0.08em',
+          }}>SUPPRIMER</button>
+        </div>
+
+        {/* Exercise name — text input, keyboard OS allowed */}
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>
+            EXERCICE
+          </div>
+          <input
+            type="text" value={block.exerciseName} onChange={e => set('exerciseName', e.target.value)}
+            style={{
+              width: '100%', boxSizing: 'border-box', padding: '14px 16px',
+              fontSize: 16, fontWeight: 700, color: 'var(--text-primary)',
+              background: 'var(--bg-primary)', border: '1px solid var(--border-strong)',
+              borderRadius: 10, outline: 'none', minHeight: 56,
+            }}
+          />
+        </div>
+
+        {/* Type-specific fields */}
+        {block.type === 'aerobic' && (
+          <>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>
+                MODE
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {AEROBIC_MODES.map(m => (
+                  <button key={m} type="button" onClick={() => set('mode', m)}
+                    style={{
+                      flex: 1, minHeight: 44, fontSize: 12, fontWeight: 700,
+                      background: block.mode === m ? 'var(--accent-laurel)' : 'var(--bg-primary)',
+                      color: block.mode === m ? 'var(--bg-primary)' : 'var(--text-secondary)',
+                      border: `1px solid ${block.mode === m ? 'var(--accent-laurel)' : 'var(--border-strong)'}`,
+                      borderRadius: 8, cursor: 'pointer',
+                    }}>{m}</button>
+                ))}
+              </div>
+            </div>
+            <UdStepper label="Durée cible" value={block.durationMinutesTarget} onChange={v => set('durationMinutesTarget', v)} min={5} max={120} step={5} unit="min" />
+            <UdStepper label="RPE cible" value={block.rpeTarget} onChange={v => set('rpeTarget', v)} min={1} max={10} step={1} />
+          </>
+        )}
+
+        {block.type === 'strength' && (
+          <>
+            <UdStepper label="Séries" value={block.setsTarget} onChange={v => set('setsTarget', v)} min={1} max={10} step={1} />
+            <UdStepper label="Répétitions" value={block.repsTarget} onChange={v => set('repsTarget', v)} min={1} max={30} step={1} />
+            <UdStepper label="Poids cible (optionnel)" value={block.weightTarget || 0} onChange={v => set('weightTarget', v || null)} min={0} max={200} step={2.5} unit="kg" />
+          </>
+        )}
+
+        {block.type === 'iso' && (
+          <>
+            <UdStepper label="Durée par round" value={block.durationSecondsTarget} onChange={v => set('durationSecondsTarget', v)} min={10} max={300} step={5} unit="s" />
+            <UdStepper label="Rounds" value={block.roundsTarget} onChange={v => set('roundsTarget', v)} min={1} max={10} step={1} />
+          </>
+        )}
+      </Card>
+    );
+  };
+
+  const udBlockSummary = (block) => {
+    if (block.type === 'aerobic') return `${block.exerciseName} · ${block.mode} · ${block.durationMinutesTarget} min · RPE ${block.rpeTarget}`;
+    if (block.type === 'strength') {
+      let s = `${block.exerciseName} · ${block.setsTarget}×${block.repsTarget}`;
+      if (block.weightTarget) s += ` @ ${block.weightTarget}kg`;
+      return s;
+    }
+    if (block.type === 'iso') return `${block.exerciseName} · ${block.roundsTarget} × ${block.durationSecondsTarget}s`;
+    return block.exerciseName || '?';
+  };
+
+  const UserDefinedSessionPage = ({ sessionDay, week, block }) => {
+    const dayInfo = WEEK_DAYS.find(d => d.sessionDay === sessionDay);
+    const [state, setState] = useState('loading');
+    const [savedConfig, setSavedConfig] = useState(null);
+    const [editBlocks, setEditBlocks] = useState([]);
+    const [showTypeSelector, setShowTypeSelector] = useState(false);
+
+    useEffect(() => {
+      db.userSessionConfigs.get(sessionDay).then(row => {
+        if (row?.configuration?.blocks?.length) {
+          setSavedConfig(row.configuration);
+          setState('preview');
+        } else {
+          setState('config');
+        }
+      }).catch(() => setState('config'));
+    }, [sessionDay]);
+
+    const enterConfig = () => {
+      const blocks = savedConfig?.blocks?.length
+        ? savedConfig.blocks.map(b => ({ ...b, _id: nextUdBlockId() }))
+        : [];
+      setEditBlocks(blocks);
+      setState('config');
+    };
+
+    const addBlock = (type) => {
+      const defaults = BLOCK_DEFAULTS[type];
+      setEditBlocks(prev => [...prev, { ...defaults, type, _id: nextUdBlockId() }]);
+      setShowTypeSelector(false);
+    };
+
+    const updateBlock = (idx, updated) => {
+      setEditBlocks(prev => prev.map((b, i) => i === idx ? updated : b));
+    };
+
+    const removeBlock = (idx) => {
+      setEditBlocks(prev => prev.filter((_, i) => i !== idx));
+    };
+
+    const saveConfig = async () => {
+      const blocks = editBlocks.map(({ _id, ...rest }) => rest);
+      const configuration = { blocks };
+      await db.userSessionConfigs.put({ sessionDay, configuration, updatedAt: new Date().toISOString() });
+      setSavedConfig(configuration);
+      setState('preview');
+    };
+
+    const cancelConfig = () => {
+      if (savedConfig) setState('preview');
+    };
+
+    if (state === 'loading') return null;
+
+    // ÉTAT A — Configuration
+    if (state === 'config') {
+      return (
+        <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
+          <div style={{ padding: 'var(--sp-5) 0 var(--sp-3)' }}>
+            <div style={{
+              fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
+              color: 'var(--text-secondary)', letterSpacing: '0.12em', textTransform: 'uppercase',
+            }}>
+              CONFIG · {dayInfo?.fr?.toUpperCase() || sessionDay.toUpperCase()} · S{week}
+            </div>
+            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Inscription size="md">{dayInfo?.label || sessionDay}</Inscription>
+            </div>
+          </div>
+
+          {editBlocks.map((block, idx) => (
+            <UdBlockEditor
+              key={block._id}
+              block={block}
+              onChange={(updated) => updateBlock(idx, updated)}
+              onRemove={() => removeBlock(idx)}
+            />
+          ))}
+
+          {/* Type selector overlay */}
+          {showTypeSelector && (
+            <Card style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.1em', marginBottom: 10 }}>
+                TYPE DE BLOC
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {BLOCK_TYPES.map(bt => (
+                  <button key={bt.type} type="button" onClick={() => addBlock(bt.type)}
+                    style={{
+                      width: '100%', minHeight: 56, fontSize: 14, fontWeight: 800,
+                      background: 'var(--bg-primary)', border: `1px solid ${bt.accent}`,
+                      borderRadius: 10, color: 'var(--text-primary)', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                    }}>
+                    <span style={{ color: bt.accent, fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-mono)', letterSpacing: '0.08em' }}>{bt.label.toUpperCase()}</span>
+                  </button>
+                ))}
+              </div>
+              <button type="button" onClick={() => setShowTypeSelector(false)}
+                style={{
+                  width: '100%', marginTop: 8, minHeight: 44, fontSize: 12, fontWeight: 700,
+                  background: 'transparent', border: '1px solid var(--border-strong)',
+                  borderRadius: 10, color: 'var(--text-tertiary)', cursor: 'pointer',
+                }}>ANNULER</button>
+            </Card>
+          )}
+
+          {/* Add block button */}
+          {!showTypeSelector && (
+            <button type="button" onClick={() => setShowTypeSelector(true)}
+              style={{
+                width: '100%', minHeight: 56, marginBottom: 16,
+                fontSize: 13, fontWeight: 800, letterSpacing: '0.08em',
+                background: 'transparent', border: '2px dashed var(--border-strong)',
+                borderRadius: 10, color: 'var(--text-secondary)', cursor: 'pointer',
+              }}>+ AJOUTER UN BLOC</button>
+          )}
+
+          {/* Save / Cancel buttons */}
+          <button type="button" onClick={saveConfig} disabled={editBlocks.length === 0}
+            className="ody-btn-primary"
+            style={{
+              width: '100%', minHeight: 56, marginBottom: 10,
+              opacity: editBlocks.length === 0 ? 0.4 : 1,
+              cursor: editBlocks.length === 0 ? 'not-allowed' : 'pointer',
+            }}>
+            ENREGISTRER LA CONFIG
+          </button>
+          {savedConfig && (
+            <button type="button" onClick={cancelConfig}
+              style={{
+                width: '100%', minHeight: 56,
+                fontSize: 13, fontWeight: 700,
+                background: 'transparent', border: '1px solid var(--border-strong)',
+                borderRadius: 10, color: 'var(--text-secondary)', cursor: 'pointer',
+              }}>ANNULER</button>
+          )}
+        </div>
+      );
+    }
+
+    // ÉTAT B — Preview
+    if (state === 'preview' && savedConfig) {
+      return (
+        <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
+          <div style={{ padding: 'var(--sp-5) 0 var(--sp-3)' }}>
+            <div style={{
+              fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
+              color: 'var(--text-secondary)', letterSpacing: '0.12em', textTransform: 'uppercase',
+            }}>
+              {"AUJOURD'HUI"} · {dayInfo?.fr?.toUpperCase() || sessionDay.toUpperCase()} · S{week}
+            </div>
+            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Inscription size="md">{block.name}</Inscription>
+              <BlockBeads total={block.weeks[1] - block.weeks[0] + 1} current={week - block.weeks[0] + 1} />
+            </div>
+          </div>
+
+          {/* Session type banner */}
+          <div className="ody-tablet" style={{
+            padding: 'var(--sp-4) var(--sp-5)', marginBottom: 'var(--sp-4)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <div>
+              <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>SÉANCE PERSO</Inscription>
+              <div style={{
+                fontFamily: 'var(--font-sans)', fontSize: 22, fontWeight: 800,
+                color: 'var(--text-primary)', marginTop: 2,
+              }}>{dayInfo?.label || sessionDay}</div>
+            </div>
+            <span style={{
+              fontSize: 9, fontWeight: 700, fontFamily: 'var(--font-mono)',
+              color: 'var(--accent-olympus)', letterSpacing: '0.1em',
+              border: '1px solid rgba(232,160,32,0.3)', borderRadius: 4, padding: '2px 6px',
+            }}>PERSO</span>
+          </div>
+
+          {/* Block preview cards */}
+          <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block' }}>
+            AU PROGRAMME · {savedConfig.blocks.length} BLOC{savedConfig.blocks.length > 1 ? 'S' : ''}
+          </Inscription>
+          {savedConfig.blocks.map((blk, idx) => {
+            const meta = BLOCK_TYPES.find(bt => bt.type === blk.type) || BLOCK_TYPES[0];
+            return (
+              <Card key={idx} style={{ marginBottom: 10, padding: '14px 16px' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+                    Bloc {idx + 1}
+                  </div>
+                  <span style={{
+                    fontSize: 8, fontWeight: 700, fontFamily: 'var(--font-mono)',
+                    color: meta.accent, letterSpacing: '0.08em',
+                  }}>{meta.label.toUpperCase()}</span>
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 4 }}>
+                  {blk.exerciseName}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  {udBlockSummary(blk)}
+                </div>
+              </Card>
+            );
+          })}
+
+          {/* Start session button — DISABLED Phase 2A */}
+          <button type="button" disabled
+            className="ody-btn-primary"
+            style={{
+              width: '100%', minHeight: 56, marginTop: 'var(--sp-3)', marginBottom: 10,
+              opacity: 0.4, cursor: 'not-allowed',
+            }}>
+            DÉMARRER · PHASE 2B
+          </button>
+
+          {/* Edit config button */}
+          <button type="button" onClick={enterConfig}
+            style={{
+              width: '100%', minHeight: 56,
+              fontSize: 13, fontWeight: 700,
+              background: 'transparent', border: '1px solid var(--border-strong)',
+              borderRadius: 10, color: 'var(--text-secondary)', cursor: 'pointer',
+            }}>MODIFIER LA CONFIG</button>
+        </div>
+      );
+    }
+
+    return null;
+  };
+
   const AujourdhuiPage = () => {
     const { query } = useLocation();
     const navigate = useNavigate();
     const week = getCurrentWeek();
     const block = getCurrentBlock(week);
     const todayDay = WEEK_DAYS.find(d => d.idx === getCurrentWeekDayIdx());
-    const requestedDay = query.day || (todayDay?.strength ? todayDay.sessionDay : null);
+    const requestedDay = query.day || ((todayDay?.strength || todayDay?.userDefined) ? todayDay.sessionDay : null);
     const day = WEEK_DAYS.find(d => d.sessionDay === requestedDay) || WEEK_DAYS[0];
     const programmeByDay = useWeekProgramme(week, useSeedTick());
     const exos = (programmeByDay && day.sessionDay) ? (programmeByDay[day.sessionDay] || []) : null;
@@ -4215,6 +4587,11 @@
       setTerminating(false);
       navigate(ROUTES.SEMAINE);
     }, [navigate]);
+
+    // User-defined day (Tuesday / Thursday) — délégation complète.
+    if (day.userDefined) {
+      return <UserDefinedSessionPage sessionDay={day.sessionDay} week={week} block={block} />;
+    }
 
     // ÉTAT 2 — séance plein écran focus
     if (sessionActive && exos && exos.length > 0) {
@@ -4534,8 +4911,8 @@
     // Uses FORMAT_META from top-level for consistent label/color mapping
 
     // Build training days from WEEK_DAYS + real programme data
-    const trainingDays = WEEK_DAYS.filter(d => d.strength && d.sessionDay).map(d => {
-      const exos = (programmeByDay && programmeByDay[d.sessionDay]) || [];
+    const trainingDays = WEEK_DAYS.filter(d => (d.strength || d.userDefined) && d.sessionDay).map(d => {
+      const exos = d.userDefined ? [] : ((programmeByDay && programmeByDay[d.sessionDay]) || []);
       const isToday = d.idx === todayIdx;
       const isPast = todayIdx === 0 ? d.idx < 7 : d.idx < todayIdx;
       return { ...d, exos, isToday, isPast };
@@ -4610,7 +4987,7 @@
                 className="ody-tablet" style={{
                   padding: 'var(--sp-3) var(--sp-4)', cursor: 'pointer', textAlign: 'left',
                   background: 'transparent', width: '100%',
-                  borderColor: d.isToday ? 'rgba(232,160,32,0.3)' : d.isPast ? 'rgba(62,207,160,0.15)' : 'var(--border-subtle)',
+                  borderColor: d.isToday ? 'rgba(232,160,32,0.3)' : d.isPast ? 'rgba(62,207,160,0.15)' : d.userDefined ? 'rgba(232,160,32,0.12)' : 'var(--border-subtle)',
                 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: d.exos.length ? 8 : 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
@@ -4619,9 +4996,17 @@
                       color: accent, letterSpacing: '0.1em', minWidth: 28,
                     }}>{DAY_LABELS[d.idx]}</span>
                     <span style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-primary)' }}>{d.label}</span>
+                    {d.userDefined && (
+                      <span style={{
+                        fontSize: 8, fontWeight: 700, fontFamily: 'var(--font-mono)',
+                        color: 'var(--accent-olympus)', letterSpacing: '0.1em',
+                        border: '1px solid rgba(232,160,32,0.3)', borderRadius: 4,
+                        padding: '1px 5px',
+                      }}>PERSO</span>
+                    )}
                   </div>
                   {d.isToday && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--accent-olympus)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Aujourd'hui</span>}
-                  {d.isPast && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--accent-laurel)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Done</span>}
+                  {d.isPast && !d.userDefined && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--accent-laurel)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Done</span>}
                 </div>
                 {d.exos.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', paddingLeft: 40 }}>
