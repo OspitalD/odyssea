@@ -910,9 +910,19 @@
         sessionDay: set.sessionDay,
         exerciseSlot: set.exerciseSlot,
         setNumber: set.setNumber,
-        weight: set.weight,
-        reps: set.reps,
-        rir: set.rir,
+        exerciseName: set.exerciseName ?? null,
+        format: set.format ?? 'traditional',
+        weight: set.weight ?? null,
+        reps: set.reps ?? null,
+        rir: set.rir ?? null,
+        e1RM: set.e1RM ?? null,
+        totalReps: set.totalReps ?? null,
+        durationMinutes: set.durationMinutes ?? null,
+        jumpHeight: set.jumpHeight ?? null,
+        jumpDistance: set.jumpDistance ?? null,
+        isTopSet: set.isTopSet ?? null,
+        isBackOff: set.isBackOff ?? null,
+        completedAt: set.completedAt ?? null,
       }),
     });
     const data = await res.json();
@@ -3116,6 +3126,7 @@
         if (reps <= 0) return;
         const newTotal = densityTotalReps + reps;
         setDensityTotalReps(newTotal);
+        const tc = getTimerConfig(ex.prescription, 'density');
         await db.sets.add({
           week, sessionDay,
           exerciseSlot: ex.exerciseSlot,
@@ -3124,6 +3135,7 @@
           format: 'density',
           weight: weight || null, reps, rir: null, e1RM: null, isPR: false,
           totalReps: newTotal,
+          durationMinutes: tc ? tc.minutes : null,
           completedAt: new Date().toISOString(),
           syncedAt: null,
         });
@@ -3138,6 +3150,7 @@
       const e1RM = round05(epley(weight, reps));
       const rpgEligible = new Set(['traditional', 'doubleProg', 'topBackoff', 'softAmrap', 'amrap']);
       const isPR = rpgEligible.has(format) && setsHistoricalBest != null && setsHistoricalBest > 0 && e1RM > setsHistoricalBest;
+      const emomTc = format === 'emom' ? getTimerConfig(ex.prescription, 'emom') : null;
       const setData = {
         week, sessionDay,
         exerciseSlot: ex.exerciseSlot,
@@ -3145,6 +3158,7 @@
         setNumber: nextSetNumber,
         format: format || 'traditional',
         weight, reps, rir, e1RM, isPR,
+        durationMinutes: emomTc ? emomTc.totalMin : null,
         completedAt: new Date().toISOString(),
         syncedAt: null,
       };
