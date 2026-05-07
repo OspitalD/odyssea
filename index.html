@@ -46,9 +46,9 @@
       --accent-olympus: #E8A020;
       --accent-royal:   #B990E0;
       --accent-blood:   #E05A4A;
-      --accent-density:   #5BA8C8;
-      --accent-softamrap: #C4885A;
-      --accent-amrap:     #D47E6A;
+      --accent-royal-soft:   #C4B3DB; /* hsl(270, 36%, 82%) — dérivé royal */
+      --accent-olympus-soft: #D4A95C; /* hsl(38, 61%, 62%) — dérivé olympus */
+      --accent-blood-soft:   #D49084; /* hsl(6, 52%, 68%) — dérivé blood */
 
       /* ─── TEXT ─── */
       --text-primary:    #F5F5F3;
@@ -712,10 +712,10 @@
     traditional: { label: 'TRAD',        color: 'var(--text-secondary)' },
     doubleProg:  { label: 'DBL PROG',    color: 'var(--accent-laurel)' },
     emom:        { label: 'EMOM',        color: 'var(--accent-royal)' },
-    density:     { label: 'DENSITY',     color: 'var(--accent-density)' },
+    density:     { label: 'DENSITY',     color: 'var(--accent-royal-soft)' },
     topBackoff:  { label: 'TOP+BO',      color: 'var(--accent-olympus)' },
-    softAmrap:   { label: 'SOFT AMRAP',  color: 'var(--accent-softamrap)' },
-    amrap:       { label: 'AMRAP',       color: 'var(--accent-amrap)' },
+    softAmrap:   { label: 'SOFT AMRAP',  color: 'var(--accent-olympus-soft)' },
+    amrap:       { label: 'AMRAP',       color: 'var(--accent-blood-soft)' },
     jump:        { label: 'JUMP',        color: 'var(--accent-blood)' },
   };
 
@@ -3186,9 +3186,9 @@
           }}>
             <span style={{ color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 700, minWidth: 24 }}>#{s.setNumber}</span>
             <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{s.weight ? `${s.weight} kg` : ''}</span>
-            <span style={{ color: 'var(--accent-density)', fontWeight: 700 }}>{s.reps} reps</span>
+            <span style={{ color: 'var(--accent-royal-soft)', fontWeight: 700 }}>{s.reps} reps</span>
             <span style={{ flex: 1 }} />
-            {s.totalReps && <span style={{ color: 'var(--accent-density)', fontSize: 11, fontWeight: 700 }}>total: {s.totalReps}</span>}
+            {s.totalReps && <span style={{ color: 'var(--accent-royal-soft)', fontSize: 11, fontWeight: 700 }}>total: {s.totalReps}</span>}
           </li>
         );
       }
@@ -3326,7 +3326,7 @@
 
     const renderDensityInput = () => (
       <div ref={setEntryRef}>
-        <div style={{ fontSize: 11, color: 'var(--accent-density)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
+        <div style={{ fontSize: 11, color: 'var(--accent-royal-soft)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
           Mini-set {nextSetNumber} · DENSITY
         </div>
         {weight > 0 && (
@@ -3342,7 +3342,7 @@
         <button type="button" onClick={validate} disabled={reps <= 0}
           style={{
             width: '100%',
-            background: flash ? 'var(--text-primary)' : (reps > 0 ? 'var(--accent-density)' : 'var(--bg-surface-hover)'),
+            background: flash ? 'var(--text-primary)' : (reps > 0 ? 'var(--accent-royal-soft)' : 'var(--bg-surface-hover)'),
             color: flash ? '#0D0F0E' : (reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
             border: 'none', borderRadius: 12, minHeight: 56, padding: '18px 0',
             fontSize: 14, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase',
@@ -3452,7 +3452,7 @@
     const renderSoftAmrapInput = () => (
       <div ref={setEntryRef}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
-          <div style={{ fontSize: 11, color: 'var(--accent-softamrap)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+          <div style={{ fontSize: 11, color: 'var(--accent-olympus-soft)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
             {isTopSet ? `Set ${nextSetNumber} · SOFT AMRAP` : `Set ${nextSetNumber} · SOFT AMRAP`}
           </div>
           {previewE1RM > 0 && (
@@ -3463,8 +3463,8 @@
         </div>
         {isBackOff && suggestedWeight && (
           <div style={{
-            fontSize: 11, color: 'var(--accent-softamrap)', background: 'rgba(196,136,90,0.08)',
-            border: '1px solid rgba(196,136,90,0.25)', borderRadius: 8,
+            fontSize: 11, color: 'var(--accent-olympus-soft)', background: 'rgba(212,169,92,0.08)',
+            border: '1px solid rgba(212,169,92,0.25)', borderRadius: 8,
             padding: '6px 10px', marginBottom: 10, fontWeight: 600,
           }}>
             ~{suggestedWeight} kg suggéré ({backoffInfo.mode === 'stripWeight' ? `strip ${Math.round(backoffInfo.percent * 100)}%` : `${Math.round(backoffInfo.percent * 100)}% e1RM`})
@@ -3485,7 +3485,7 @@
         <button type="button" onClick={validate} disabled={weight <= 0 || reps <= 0}
           style={{
             width: '100%',
-            background: flash ? 'var(--text-primary)' : (weight > 0 && reps > 0 ? 'var(--accent-softamrap)' : 'var(--bg-surface-hover)'),
+            background: flash ? 'var(--text-primary)' : (weight > 0 && reps > 0 ? 'var(--accent-olympus-soft)' : 'var(--bg-surface-hover)'),
             color: flash ? '#0D0F0E' : (weight > 0 && reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
             border: 'none', borderRadius: 12, minHeight: 56, padding: '18px 0',
             fontSize: 14, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase',
@@ -3498,7 +3498,7 @@
     const renderAmrapInput = () => (
       <div ref={setEntryRef}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
-          <div style={{ fontSize: 11, color: 'var(--accent-amrap)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+          <div style={{ fontSize: 11, color: 'var(--accent-blood-soft)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
             Set {nextSetNumber} · AMRAP
           </div>
           {previewE1RM > 0 && (
@@ -3522,7 +3522,7 @@
         <button type="button" onClick={validate} disabled={weight <= 0 || reps <= 0}
           style={{
             width: '100%',
-            background: flash ? 'var(--text-primary)' : (weight > 0 && reps > 0 ? 'var(--accent-amrap)' : 'var(--bg-surface-hover)'),
+            background: flash ? 'var(--text-primary)' : (weight > 0 && reps > 0 ? 'var(--accent-blood-soft)' : 'var(--bg-surface-hover)'),
             color: flash ? '#0D0F0E' : (weight > 0 && reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
             border: 'none', borderRadius: 12, minHeight: 56, padding: '18px 0',
             fontSize: 14, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase',
