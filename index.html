@@ -934,12 +934,15 @@
     return data;
   }
 
-  // Sync de tous les sets non-syncés. Retourne {success, fail}.
+  const USER_DEFINED_DAYS = ['Tuesday', 'Thursday'];
+
+  // Sync de tous les sets non-syncés STRENGTH. Retourne {success, fail}.
   // Appelé au boot (si online) et à chaque tap TERMINER.
+  // Exclut les sets user-defined (syncs via writeUserSession au TERMINER).
   async function syncPendingSets() {
     if (!navigator.onLine) return { success: 0, fail: 0, skipped: 'offline' };
     const all = await db.sets.toArray();
-    const unsynced = all.filter(s => !s.syncedAt);
+    const unsynced = all.filter(s => !s.syncedAt && !USER_DEFINED_DAYS.includes(s.sessionDay));
     let success = 0, fail = 0;
     for (const set of unsynced) {
       try {
@@ -951,6 +954,39 @@
       }
     }
     return { success, fail, total: unsynced.length };
+  }
+
+  async function postWriteUserSession(week, sessionDay, configuration, sets, completedAt, notes) {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'writeUserSession',
+        week, sessionDay, configuration, sets, completedAt,
+        ...(notes ? { notes } : {}),
+      }),
+    });
+    const data = await res.json();
+    if (!data || !data.ok) throw new Error((data && data.error) || 'writeUserSession failed');
+    return data;
+  }
+
+  async function syncPendingUserSessions() {
+    if (!navigator.onLine) return;
+    for (const day of USER_DEFINED_DAYS) {
+      const sets = await db.sets.where('sessionDay').equals(day).toArray();
+      const unsynced = sets.filter(s => !s.syncedAt);
+      if (unsynced.length === 0) continue;
+      const flag = await db.prefs.get('udSessionInProgress');
+      if (flag?.value?.sessionDay === day) continue;
+      const configRow = await db.userSessionConfigs.get(day);
+      if (!configRow?.configuration) continue;
+      const weekVal = unsynced[0].week;
+      try {
+        await postWriteUserSession(weekVal, day, configRow.configuration, unsynced, new Date().toISOString());
+        const now = new Date().toISOString();
+        for (const s of unsynced) await db.sets.update(s.id, { syncedAt: now });
+      } catch {}
+    }
   }
 
   /* ==========================================================
@@ -4139,23 +4175,215 @@
     return block.exerciseName || '?';
   };
 
+  const UdAerobicInput = ({ blk, blockIdx, sets, onValidated }) => {
+    const existing = sets.find(s => s.exerciseSlot === blockIdx && s.format === 'aerobic');
+    const [dur, setDur] = useState(existing?.durationMinutes ?? blk.durationMinutesTarget);
+    const [rpe, setRpe] = useState(existing?.rpe ?? blk.rpeTarget);
+    const [done, setDone] = useState(!!existing);
+
+    const validate = async () => {
+      if (existing) await db.sets.delete(existing.id);
+      await db.sets.add({
+        week: getCurrentWeek(), sessionDay: blk._sessionDay, exerciseSlot: blockIdx,
+        setNumber: 1, format: 'aerobic', exerciseName: blk.exerciseName,
+        durationMinutes: dur, rpe, completedAt: new Date().toISOString(), syncedAt: null,
+      });
+      setDone(true);
+      onValidated();
+    };
+    const redo = async () => {
+      if (existing) await db.sets.delete(existing.id);
+      setDone(false);
+      onValidated();
+    };
+
+    if (done) return (
+      <Card style={{ padding: '16px' }}>
+        <div style={{ fontSize: 11, color: 'var(--accent-laurel)', fontWeight: 700, letterSpacing: '0.1em', marginBottom: 8 }}>VALIDÉ</div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)' }}>{dur} min · RPE {rpe}</div>
+        <button type="button" onClick={redo} style={{
+          marginTop: 12, width: '100%', minHeight: 48, fontSize: 12, fontWeight: 700,
+          background: 'transparent', border: '1px solid var(--border-strong)',
+          borderRadius: 10, color: 'var(--text-secondary)', cursor: 'pointer',
+        }}>REFAIRE</button>
+      </Card>
+    );
+    return (
+      <Card style={{ padding: '16px' }}>
+        <UdStepper label="Durée réelle" value={dur} onChange={setDur} min={1} max={180} step={1} unit="min" />
+        <UdStepper label="RPE ressenti" value={rpe} onChange={setRpe} min={1} max={10} step={1} />
+        <button type="button" onClick={validate} className="ody-btn-primary"
+          style={{ width: '100%', minHeight: 56, marginTop: 8 }}>VALIDER</button>
+      </Card>
+    );
+  };
+
+  const UdStrengthInput = ({ blk, blockIdx, sets, onValidated }) => {
+    const blockSets = sets.filter(s => s.exerciseSlot === blockIdx && s.format === 'strength')
+      .sort((a, b) => a.setNumber - b.setNumber);
+    const lastSet = blockSets[blockSets.length - 1];
+    const [weight, setWeight] = useState(lastSet?.weight ?? blk.weightTarget ?? 0);
+    const [reps, setReps] = useState(lastSet?.reps ?? blk.repsTarget);
+    const [rir, setRir] = useState(lastSet?.rir ?? 2);
+
+    useEffect(() => {
+      if (lastSet) { setWeight(lastSet.weight ?? blk.weightTarget ?? 0); setReps(lastSet.reps ?? blk.repsTarget); }
+    }, [blockSets.length]);
+
+    const validateSet = async () => {
+      const setNumber = blockSets.length + 1;
+      await db.sets.add({
+        week: getCurrentWeek(), sessionDay: blk._sessionDay, exerciseSlot: blockIdx,
+        setNumber, format: 'strength', exerciseName: blk.exerciseName,
+        weight, reps, rir, e1RM: round05(epley(weight, reps)),
+        completedAt: new Date().toISOString(), syncedAt: null,
+      });
+      onValidated();
+    };
+    const removeLastSet = async () => {
+      if (!lastSet) return;
+      await db.sets.delete(lastSet.id);
+      onValidated();
+    };
+
+    return (
+      <Card style={{ padding: '16px' }}>
+        {blockSets.length > 0 && (
+          <div style={{ marginBottom: 14, borderBottom: '1px solid var(--border-subtle)', paddingBottom: 10 }}>
+            {blockSets.map(s => (
+              <div key={s.id} style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 4, display: 'flex', gap: 8 }}>
+                <span style={{ color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>S{s.setNumber}</span>
+                <span>{s.weight}kg × {s.reps} @{s.rir}RIR</span>
+                <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>e1RM {s.e1RM}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.1em', marginBottom: 8 }}>
+          SET {blockSets.length + 1}{blockSets.length < blk.setsTarget ? ` / ${blk.setsTarget}` : ' (bonus)'}
+        </div>
+        <UdStepper label="Poids" value={weight} onChange={setWeight} min={0} max={300} step={2.5} unit="kg" />
+        <UdStepper label="Reps" value={reps} onChange={setReps} min={1} max={50} step={1} />
+        <UdStepper label="RIR" value={rir} onChange={setRir} min={0} max={5} step={1} />
+        <button type="button" onClick={validateSet} className="ody-btn-primary"
+          style={{ width: '100%', minHeight: 56, marginTop: 8 }}>VALIDER SET</button>
+        {blockSets.length > 0 && (
+          <button type="button" onClick={removeLastSet} style={{
+            width: '100%', minHeight: 44, marginTop: 8, fontSize: 12, fontWeight: 700,
+            background: 'transparent', border: '1px solid var(--accent-blood)',
+            borderRadius: 10, color: 'var(--accent-blood)', cursor: 'pointer',
+          }}>RETIRER LE DERNIER SET</button>
+        )}
+      </Card>
+    );
+  };
+
+  const UdIsoInput = ({ blk, blockIdx, sets, onValidated }) => {
+    const blockSets = sets.filter(s => s.exerciseSlot === blockIdx && s.format === 'iso')
+      .sort((a, b) => a.setNumber - b.setNumber);
+    const [dur, setDur] = useState(blk.durationSecondsTarget);
+
+    const validateRound = async () => {
+      const setNumber = blockSets.length + 1;
+      await db.sets.add({
+        week: getCurrentWeek(), sessionDay: blk._sessionDay, exerciseSlot: blockIdx,
+        setNumber, format: 'iso', exerciseName: blk.exerciseName,
+        durationSeconds: dur, completedAt: new Date().toISOString(), syncedAt: null,
+      });
+      onValidated();
+    };
+
+    return (
+      <Card style={{ padding: '16px' }}>
+        {blockSets.length > 0 && (
+          <div style={{ marginBottom: 14, borderBottom: '1px solid var(--border-subtle)', paddingBottom: 10 }}>
+            {blockSets.map(s => (
+              <div key={s.id} style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', fontSize: 11, marginRight: 8 }}>R{s.setNumber}</span>
+                {s.durationSeconds}s
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.1em', marginBottom: 8 }}>
+          ROUND {blockSets.length + 1}{blockSets.length < blk.roundsTarget ? ` / ${blk.roundsTarget}` : ' (bonus)'}
+        </div>
+        <UdStepper label="Durée" value={dur} onChange={setDur} min={5} max={600} step={5} unit="s" />
+        <button type="button" onClick={validateRound} className="ody-btn-primary"
+          style={{ width: '100%', minHeight: 56, marginTop: 8 }}>VALIDER ROUND</button>
+      </Card>
+    );
+  };
+
   const UserDefinedSessionPage = ({ sessionDay, week, block }) => {
     const dayInfo = WEEK_DAYS.find(d => d.sessionDay === sessionDay);
+    const navigate = useNavigate();
     const [state, setState] = useState('loading');
     const [savedConfig, setSavedConfig] = useState(null);
     const [editBlocks, setEditBlocks] = useState([]);
     const [showTypeSelector, setShowTypeSelector] = useState(false);
 
+    // État C
+    const [sessionActive, setSessionActive] = useState(false);
+    const [sessionStartedAt, setSessionStartedAt] = useState(null);
+    const [currentBlockIdx, setCurrentBlockIdx] = useState(0);
+    const [sessionSets, setSessionSets] = useState([]);
+    const [showQuitModal, setShowQuitModal] = useState(false);
+    const [terminating, setTerminating] = useState(false);
+
+    // État D
+    const [endPhrase, setEndPhrase] = useState(null);
+    const [endingSessionId, setEndingSessionId] = useState(null);
+    const [recapStats, setRecapStats] = useState(null);
+
+    const refreshSessionSets = useCallback(async () => {
+      const all = await db.sets.where('week').equals(week).toArray();
+      setSessionSets(all.filter(s => s.sessionDay === sessionDay));
+    }, [week, sessionDay]);
+
     useEffect(() => {
-      db.userSessionConfigs.get(sessionDay).then(row => {
+      (async () => {
+        const row = await db.userSessionConfigs.get(sessionDay).catch(() => null);
         if (row?.configuration?.blocks?.length) {
           setSavedConfig(row.configuration);
-          setState('preview');
+          // Check if session in progress
+          const flag = await db.prefs.get('udSessionInProgress').catch(() => null);
+          if (flag?.value?.sessionDay === sessionDay && flag?.value?.week === week) {
+            const startedMs = new Date(flag.value.startedAt).getTime();
+            const lastMs = flag.value.lastInputAt ? new Date(flag.value.lastInputAt).getTime() : null;
+            const SIX_H = 6 * 3600 * 1000, TWO_H = 2 * 3600 * 1000;
+            const expired = (Date.now() - startedMs > SIX_H) || (lastMs != null && Date.now() - lastMs > TWO_H);
+            if (!expired) {
+              setSessionStartedAt(flag.value.startedAt);
+              setCurrentBlockIdx(flag.value.currentBlock || 0);
+              setSessionActive(true);
+              await refreshSessionSets();
+              setState('session');
+              return;
+            }
+            await db.prefs.delete('udSessionInProgress').catch(() => {});
+          }
+          // Check session already completed
+          const existing = await db.sessions.where({ week, sessionDay }).first().catch(() => null);
+          if (existing?.completedAt) {
+            await refreshSessionSets();
+            setState('recap');
+          } else {
+            setState('preview');
+          }
         } else {
           setState('config');
         }
-      }).catch(() => setState('config'));
+      })();
     }, [sessionDay]);
+
+    useEffect(() => {
+      const shell = document.querySelector('.app-shell');
+      if (!shell) return;
+      if (sessionActive) shell.classList.add('session-focus');
+      else shell.classList.remove('session-focus');
+      return () => shell.classList.remove('session-focus');
+    }, [sessionActive]);
 
     const enterConfig = () => {
       const blocks = savedConfig?.blocks?.length
@@ -4191,6 +4419,106 @@
       if (savedConfig) setState('preview');
     };
 
+    const startSession = async () => {
+      try { navigator.vibrate && navigator.vibrate(10); } catch {}
+      const startedAt = new Date().toISOString();
+      await db.prefs.put({ key: 'udSessionInProgress', value: { week, sessionDay, currentBlock: 0, startedAt, lastInputAt: null } });
+      setSessionStartedAt(startedAt);
+      setCurrentBlockIdx(0);
+      setSessionActive(true);
+      await refreshSessionSets();
+      setState('session');
+      try { window.scrollTo({ top: 0, behavior: 'auto' }); } catch {}
+    };
+
+    const navigateBlock = async (idx) => {
+      setCurrentBlockIdx(idx);
+      try {
+        const flag = await db.prefs.get('udSessionInProgress');
+        if (flag?.value) await db.prefs.put({ key: 'udSessionInProgress', value: { ...flag.value, currentBlock: idx } });
+      } catch {}
+      try { window.scrollTo({ top: 0, behavior: 'auto' }); } catch {}
+    };
+
+    const handleInputValidated = async () => {
+      await refreshSessionSets();
+      try {
+        const flag = await db.prefs.get('udSessionInProgress');
+        if (flag?.value) await db.prefs.put({ key: 'udSessionInProgress', value: { ...flag.value, lastInputAt: new Date().toISOString() } });
+      } catch {}
+    };
+
+    const quitSession = async () => {
+      try { await db.prefs.delete('udSessionInProgress'); } catch {}
+      setSessionActive(false);
+      setSessionStartedAt(null);
+      setShowQuitModal(false);
+      setState('preview');
+    };
+
+    const canTerminate = savedConfig && savedConfig.blocks.length > 0 &&
+      savedConfig.blocks.every((blk, idx) =>
+        sessionSets.some(s => s.exerciseSlot === idx && s.format === blk.type)
+      );
+
+    const onTerminate = async () => {
+      if (!canTerminate || terminating) return;
+      setTerminating(true);
+      try { navigator.vibrate && navigator.vibrate(10); } catch {}
+      const completedAt = new Date().toISOString();
+
+      let sessionRowId = null;
+      try {
+        const existing = await db.sessions.where({ week, sessionDay }).first();
+        if (existing) {
+          await db.sessions.update(existing.id, { completedAt, syncedAt: null });
+          sessionRowId = existing.id;
+        } else {
+          sessionRowId = await db.sessions.add({
+            week, sessionDay,
+            startedAt: sessionStartedAt || completedAt,
+            completedAt, syncedAt: null,
+          });
+        }
+      } catch {}
+
+      try { await db.prefs.delete('udSessionInProgress'); } catch {}
+
+      // Sync via writeUserSession
+      const setsToSync = await db.sets.where('week').equals(week).toArray()
+        .then(all => all.filter(s => s.sessionDay === sessionDay));
+      try {
+        await postWriteUserSession(week, sessionDay, savedConfig, setsToSync, completedAt);
+        const now = new Date().toISOString();
+        for (const s of setsToSync) await db.sets.update(s.id, { syncedAt: now });
+      } catch {}
+
+      try { await bumpStreak(); } catch {}
+
+      // Compute recap stats
+      const strengthSets = setsToSync.filter(s => s.format === 'strength');
+      const volKg = strengthSets.reduce((a, s) => a + (s.weight || 0) * (s.reps || 0), 0);
+      const aerobicMin = setsToSync.filter(s => s.format === 'aerobic').reduce((a, s) => a + (s.durationMinutes || 0), 0);
+      const isoSec = setsToSync.filter(s => s.format === 'iso').reduce((a, s) => a + (s.durationSeconds || 0), 0);
+      const rpes = setsToSync.filter(s => s.rpe != null).map(s => s.rpe);
+      const avgRpe = rpes.length ? Math.round(rpes.reduce((a, r) => a + r, 0) / rpes.length * 10) / 10 : null;
+      setRecapStats({ volKg, aerobicMin, isoSec, strengthSets: strengthSets.length, avgRpe, totalSets: setsToSync.length });
+
+      setEndingSessionId(sessionRowId);
+      const phrase = await pickEndPhrase();
+      setEndPhrase(phrase);
+
+      setSessionActive(false);
+      setState('recap');
+      setTerminating(false);
+    };
+
+    const handleEndComplete = useCallback(() => {
+      setEndPhrase(null);
+      setEndingSessionId(null);
+      navigate(ROUTES.SEMAINE);
+    }, [navigate]);
+
     if (state === 'loading') return null;
 
     // ÉTAT A — Configuration
@@ -4218,7 +4546,6 @@
             />
           ))}
 
-          {/* Type selector overlay */}
           {showTypeSelector && (
             <Card style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.1em', marginBottom: 10 }}>
@@ -4246,7 +4573,6 @@
             </Card>
           )}
 
-          {/* Add block button */}
           {!showTypeSelector && (
             <button type="button" onClick={() => setShowTypeSelector(true)}
               style={{
@@ -4257,7 +4583,6 @@
               }}>+ AJOUTER UN BLOC</button>
           )}
 
-          {/* Save / Cancel buttons */}
           <button type="button" onClick={saveConfig} disabled={editBlocks.length === 0}
             className="ody-btn-primary"
             style={{
@@ -4297,7 +4622,6 @@
             </div>
           </div>
 
-          {/* Session type banner */}
           <div className="ody-tablet" style={{
             padding: 'var(--sp-4) var(--sp-5)', marginBottom: 'var(--sp-4)',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -4316,7 +4640,6 @@
             }}>PERSO</span>
           </div>
 
-          {/* Block preview cards */}
           <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block' }}>
             AU PROGRAMME · {savedConfig.blocks.length} BLOC{savedConfig.blocks.length > 1 ? 'S' : ''}
           </Inscription>
@@ -4343,17 +4666,12 @@
             );
           })}
 
-          {/* Start session button — DISABLED Phase 2A */}
-          <button type="button" disabled
+          <button type="button" onClick={startSession}
             className="ody-btn-primary"
-            style={{
-              width: '100%', minHeight: 56, marginTop: 'var(--sp-3)', marginBottom: 10,
-              opacity: 0.4, cursor: 'not-allowed',
-            }}>
-            DÉMARRER · PHASE 2B
+            style={{ width: '100%', minHeight: 56, marginTop: 'var(--sp-3)', marginBottom: 10 }}>
+            DÉMARRER LA SÉANCE
           </button>
 
-          {/* Edit config button */}
           <button type="button" onClick={enterConfig}
             style={{
               width: '100%', minHeight: 56,
@@ -4362,6 +4680,124 @@
               borderRadius: 10, color: 'var(--text-secondary)', cursor: 'pointer',
             }}>MODIFIER LA CONFIG</button>
         </div>
+      );
+    }
+
+    // ÉTAT C — Séance plein écran
+    if (state === 'session' && savedConfig) {
+      const blocks = savedConfig.blocks;
+      const blk = blocks[currentBlockIdx] || blocks[0];
+      const meta = BLOCK_TYPES.find(bt => bt.type === blk.type) || BLOCK_TYPES[0];
+      const blkWithDay = { ...blk, _sessionDay: sessionDay };
+
+      return (
+        <>
+          <div style={{ padding: '0 16px 24px' }}>
+            <SessionFocusHeader
+              title={`${dayInfo?.label || sessionDay} · ${currentBlockIdx + 1}/${blocks.length}`}
+              startedAt={sessionStartedAt}
+              onQuit={() => setShowQuitModal(true)}
+            />
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
+            }}>
+              <span style={{
+                fontSize: 9, fontWeight: 700, fontFamily: 'var(--font-mono)',
+                color: meta.accent, letterSpacing: '0.1em', textTransform: 'uppercase',
+                border: `1px solid ${meta.accent}`, borderRadius: 4, padding: '2px 6px',
+              }}>{meta.label.toUpperCase()}</span>
+              <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)' }}>{blk.exerciseName}</span>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 16 }}>{udBlockSummary(blk)}</div>
+
+            {blk.type === 'aerobic' && <UdAerobicInput blk={blkWithDay} blockIdx={currentBlockIdx} sets={sessionSets} onValidated={handleInputValidated} />}
+            {blk.type === 'strength' && <UdStrengthInput blk={blkWithDay} blockIdx={currentBlockIdx} sets={sessionSets} onValidated={handleInputValidated} />}
+            {blk.type === 'iso' && <UdIsoInput blk={blkWithDay} blockIdx={currentBlockIdx} sets={sessionSets} onValidated={handleInputValidated} />}
+
+            <div style={{ height: 200 }} />
+          </div>
+          <SlotNav
+            currentSlot={currentBlockIdx}
+            exos={blocks.map((_, i) => ({ exerciseSlot: i }))}
+            onPrev={() => currentBlockIdx > 0 && navigateBlock(currentBlockIdx - 1)}
+            onNext={() => currentBlockIdx < blocks.length - 1 && navigateBlock(currentBlockIdx + 1)}
+            onTerminate={onTerminate}
+            canTerminate={canTerminate}
+            terminating={terminating}
+          />
+          {showQuitModal && <QuitConfirmModal onContinue={() => setShowQuitModal(false)} onQuit={quitSession} />}
+          {endPhrase && <SessionEndOverlay phrase={endPhrase} sessionId={endingSessionId} onComplete={handleEndComplete} />}
+        </>
+      );
+    }
+
+    // ÉTAT D — Récap
+    if (state === 'recap') {
+      return (
+        <>
+          <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
+            <div style={{ padding: 'var(--sp-5) 0 var(--sp-3)' }}>
+              <div style={{
+                fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
+                color: 'var(--accent-laurel)', letterSpacing: '0.12em', textTransform: 'uppercase',
+              }}>
+                SÉANCE TERMINÉE · {dayInfo?.fr?.toUpperCase()} · S{week}
+              </div>
+              <div style={{ marginTop: 6 }}>
+                <Inscription size="md">{dayInfo?.label || sessionDay}</Inscription>
+              </div>
+            </div>
+
+            {recapStats && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)' }}>
+                {recapStats.volKg > 0 && (
+                  <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+                    <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent-laurel)' }}>
+                      {recapStats.volKg >= 1000 ? `${(recapStats.volKg / 1000).toFixed(1)}k` : recapStats.volKg}
+                    </div>
+                    <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>VOLUME KG</Inscription>
+                  </div>
+                )}
+                {recapStats.aerobicMin > 0 && (
+                  <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+                    <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800 }}>{recapStats.aerobicMin}</div>
+                    <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>MIN AÉROBIE</Inscription>
+                  </div>
+                )}
+                {recapStats.isoSec > 0 && (
+                  <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+                    <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800 }}>{recapStats.isoSec}s</div>
+                    <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>ISO TOTAL</Inscription>
+                  </div>
+                )}
+                {recapStats.totalSets > 0 && (
+                  <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+                    <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800 }}>{recapStats.totalSets}</div>
+                    <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>SAISIES</Inscription>
+                  </div>
+                )}
+                {recapStats.avgRpe != null && (
+                  <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+                    <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent-olympus)' }}>{recapStats.avgRpe}</div>
+                    <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>RPE MOY</Inscription>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <button type="button" onClick={enterConfig}
+              style={{
+                width: '100%', minHeight: 56, marginBottom: 10,
+                fontSize: 13, fontWeight: 700,
+                background: 'transparent', border: '1px solid var(--border-strong)',
+                borderRadius: 10, color: 'var(--text-secondary)', cursor: 'pointer',
+              }}>MODIFIER LA CONFIG</button>
+            <button type="button" onClick={() => navigate(ROUTES.SEMAINE)}
+              className="ody-btn-primary"
+              style={{ width: '100%', minHeight: 56 }}>RETOUR</button>
+          </div>
+          {endPhrase && <SessionEndOverlay phrase={endPhrase} sessionId={endingSessionId} onComplete={handleEndComplete} />}
+        </>
       );
     }
 
@@ -6570,6 +7006,21 @@
       });
       // Sync les sets stockés offline au lancement (no-op si online et tout déjà sync).
       syncPendingSets().catch(() => {});
+      // Resync sessions user-defined pending (offline TERMINER).
+      syncPendingUserSessions().catch(() => {});
+      // Auto-clear du flag udSessionInProgress s'il est expiré.
+      (async () => {
+        try {
+          const udFlag = await db.prefs.get('udSessionInProgress');
+          if (udFlag?.value?.startedAt) {
+            const startedMs = new Date(udFlag.value.startedAt).getTime();
+            const lastMs = udFlag.value.lastInputAt ? new Date(udFlag.value.lastInputAt).getTime() : null;
+            const SIX_H = 6 * 3600 * 1000, TWO_H = 2 * 3600 * 1000;
+            const expired = (Date.now() - startedMs > SIX_H) || (lastMs != null && Date.now() - lastMs > TWO_H);
+            if (expired) await db.prefs.delete('udSessionInProgress');
+          }
+        } catch {}
+      })();
       // Octroie 1 pardon mensuel si le mois a changé.
       ensureMonthlyPardon().catch(() => {});
       // Charge la pref sons (default true).
