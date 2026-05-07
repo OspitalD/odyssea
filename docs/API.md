@@ -10,7 +10,7 @@
 ## URLs
 
 - **Spreadsheet** : https://docs.google.com/spreadsheets/d/1yDzf5Ug_hkEe_x-Td1peTRrYGDAMXQUKzNPi-TccqWU/edit
-- **API (Web App)** : https://script.google.com/macros/s/AKfycbxsOdnNAEmyONDJYYkCWwQjK5bX6HunFQ3auV_pInSTzoz-GE5rEfdHr9SeZ2Gvwei7oQ/exec
+- **API (Web App)** : https://script.google.com/macros/s/AKfycbx1fBaHJpvRSMKfTnpFM5OdML8IMeUKZEQnI-k3rVzl_V1Lq3lp4bIt6-xcHPny9p3OrA/exec
 - **Google Drive Folder** : https://drive.google.com/drive/u/0/folders/1ECDSrDfJ6PbM9lWfKKTU7Zk5xWyU4psR
 
 L'URL API est hardcodée comme fallback dans `index.html` (`CONFIG.SHEETS_API_URL_DEFAULT`). Override possible via `/reglages` (stocké en localStorage sous `hoss_sheets_api_url`).
@@ -66,7 +66,7 @@ Convention de nommage : `WEEK 1 - Table 1` (majuscules pour la 1ère) puis `Week
 ### GET /exec — Health check
 
 ```bash
-curl -L "https://script.google.com/macros/s/AKfycbxsOdnNAEmyONDJYYkCWwQjK5bX6HunFQ3auV_pInSTzoz-GE5rEfdHr9SeZ2Gvwei7oQ/exec"
+curl -L "https://script.google.com/macros/s/AKfycbx1fBaHJpvRSMKfTnpFM5OdML8IMeUKZEQnI-k3rVzl_V1Lq3lp4bIt6-xcHPny9p3OrA/exec"
 ```
 
 Réponse :
@@ -84,7 +84,7 @@ Réponse :
 # -X POST force la méthode après redirection → 405. Utiliser -d seul.
 curl -sL -H "Content-Type: application/json" \
   -d '{"action":"writeSet","week":1,"sessionDay":"Monday","exerciseSlot":1,"setNumber":1,"weight":90,"reps":5,"rir":2}' \
-  "https://script.google.com/macros/s/AKfycbxsOdnNAEmyONDJYYkCWwQjK5bX6HunFQ3auV_pInSTzoz-GE5rEfdHr9SeZ2Gvwei7oQ/exec"
+  "https://script.google.com/macros/s/AKfycbx1fBaHJpvRSMKfTnpFM5OdML8IMeUKZEQnI-k3rVzl_V1Lq3lp4bIt6-xcHPny9p3OrA/exec"
 ```
 
 Payload :
@@ -147,11 +147,11 @@ Mappings validés. **À retenir** : la cellule W108/X108/Y108 de Week 20 Saturda
 
 ```javascript
 // Health check
-fetch("https://script.google.com/macros/s/AKfycbxsOdnNAEmyONDJYYkCWwQjK5bX6HunFQ3auV_pInSTzoz-GE5rEfdHr9SeZ2Gvwei7oQ/exec")
+fetch("https://script.google.com/macros/s/AKfycbx1fBaHJpvRSMKfTnpFM5OdML8IMeUKZEQnI-k3rVzl_V1Lq3lp4bIt6-xcHPny9p3OrA/exec")
   .then(r => r.json()).then(console.log);
 
 // writeSet
-fetch("https://script.google.com/macros/s/AKfycbxsOdnNAEmyONDJYYkCWwQjK5bX6HunFQ3auV_pInSTzoz-GE5rEfdHr9SeZ2Gvwei7oQ/exec", {
+fetch("https://script.google.com/macros/s/AKfycbx1fBaHJpvRSMKfTnpFM5OdML8IMeUKZEQnI-k3rVzl_V1Lq3lp4bIt6-xcHPny9p3OrA/exec", {
   method: "POST",
   body: JSON.stringify({action:"writeSet",week:1,sessionDay:"Monday",exerciseSlot:1,setNumber:1,weight:90,reps:5,rir:2})
 }).then(r => r.json()).then(console.log);

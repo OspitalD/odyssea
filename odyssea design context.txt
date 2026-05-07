@@ -1,0 +1,155 @@
+# Odyssea — Design Context
+
+> Strength training tracker built around the Hoss Project 2.0 (20-week programme), framed as Ulysses' Odyssey. Single-user (the creator), single-file React 18 app, used primarily as an installed PWA on iPhone inside a commercial gym.
+
+---
+
+## Users
+
+**Primary (and only) user**: solo lifter, ADHD profile (« Explorateur Impulsif »), training the Hoss Project 2.0 — a fixed 20-week programme. Trains in a commercial gym (Fitness Park).
+
+**Two viewing contexts that pull in opposite directions**:
+
+1. **In-session, on iPhone, mid-workout** — chalked/sweaty hands, elevated heart rate, ~2-second glances between sets, single-handed thumb reach, bright fluorescent lighting and mirror reflections, occasional outdoor sunlight, poor signal in the basement. The interface must *disappear*: tactical, calm, dark, large tap targets (≥56px for primary actions), no animations during set entry, no OS keyboard ever (steppers + toggles only).
+2. **Between sessions, on couch** — reviewing progression (e1RM, ATHX standards, attributes radar : Sthénos / Bia / Pónos / Mètis / Áreté), surveying the journey (block names, week count, map of the Odyssey, ATHX countdown), tracking streaks and unlocks.
+
+**Jobs to be done, in priority order**:
+
+1. **Log workouts in real time, with maximum speed and minimum cognitive load** — weight, reps, RIR, set after set. The 90-second-per-set loop is what the app lives or dies by.
+2. **Review progression** — visual feedback on e1RM, ATHX standards, attributes, radar.
+3. **Visualize the journey** — see where I am in the 20-week voyage. Source of meaning, not data.
+4. **Track streak and unlocks** — dopamine-positive consistency feedback.
+
+**Explicit non-jobs**: planning or editing sessions. The programme is fixed; the app *reveals* what's next, it doesn't let me edit it.
+
+---
+
+## Brand Personality
+
+**Three words**: brut, puissant, mythique. (Underground, héroïque are close-orbit synonyms.)
+
+**The combined feeling**: a stoic athlete's training journal. Not Strava, not corporate, not hype-fitness.
+
+**Reference orbit**:
+- Boutique strength app for serious lifters — dense but legible, treats the user as competent
+- A handcrafted ancient artifact — the patina of a Greek black-figure ceramic, the weight of a stone tablet
+- A high-end watch face / military hardware UI — every element earns its place
+- Stripe Press meets Marcus Aurelius
+- Inspirations called out: Revolut, Whoop (simpler), Iron Man vibe, the shareable virality of Strava session images (but not the rest of Strava), Greek mythology
+
+**Anti-references**:
+- ❌ Brutal/industrial — too aggressive, breaks the contemplative voyage
+- ❌ Apple/Linear sleek-minimal — too cold, lacks humanity and texture the mythology requires
+- ❌ Trading-terminal data density — the lifter needs the right 2-3 metrics now, not 12
+- ❌ Nike/Gatorade hype-athletic — this app *whispers* "endure", it does not shout "GO HARD"
+- ❌ Retro / vaporwave / faux-vintage — the classical references are *real* classical, not pastiche
+- ❌ Strava-style social fitness app
+
+**Emotional arc**: never hype, never corporate, never analytical-cold. In-session = a ritual, a monk logging his daily practice. Between sessions = subtle reminder of a meaningful journey, with mythology as *invisible architecture*, not decoration. Greek (mythological terms, Ὀδύσσεια, microcopy like « Endure, mon cœur. » / « Cap sur Ithaque. ») is reserved for EB Garamond italic and used sparingly so it retains its weight.
+
+---
+
+## Aesthetic Direction
+
+### Theme
+**Dark mode only.** No toggle. Base `#0D0F0E` (near-black with a slight green undertone). Pure black is forbidden — it causes more reflective glare under fluorescents than near-black does.
+
+### Typography
+- **Plus Jakarta Sans 400–800** for everything functional (UI, numbers, body, labels).
+- **EB Garamond italic** reserved exclusively for Greek and mythological phrases. Never for chrome, never for numbers, never decorative. Used sparingly — its weight comes from rarity.
+- Critical numbers (current weight, current rep, e1RM, set number) in the 24–32px range; the active set's weight must be the **largest text on the entire screen** during a set. The phone is sometimes 30–50cm away on a bench.
+
+### Color Palette (existing — hex values are locked, do not change)
+
+**Surfaces & text**
+- `--bg-primary: #0D0F0E` — dominant surface
+- `--bg-surface: #111412` — cards (slightly lifted)
+- `--bg-surface-hover: #141815` — interactive states
+- `--border-subtle: rgba(255,255,255,0.06)` — almost invisible card boundaries
+- `--border-strong: rgba(255,255,255,0.10)` — when hierarchy demands it
+- `--text-primary: #F5F5F3` — warm off-white (never pure white)
+- `--text-secondary: #7A7C7A` — muted gray
+- `--text-tertiary: #4A4D4B` — labels, captions
+
+**Mythological semantic accents** (each carries meaning, used sparingly, max 1 per screen — 2 only if strict hierarchy demands)
+- `--accent-laurel: #3ECFA0` — success, validated set, mortal victory (laurel-crown green)
+- `--accent-olympus: #E8A020` — divine, PR broken, ATHX countdown (Olympian gold)
+- `--accent-royal: #B990E0` — noble, info, navigation highlight (Tyrian purple)
+- `--accent-blood: #E05A4A` — sacrifice, regression, danger. **Reserved for genuine danger/regression, never for "delete" buttons or generic warnings** — those go to neutral muted gray.
+
+**Streak rank colors** (Mortel → Olympien, each sacred to its rank)
+- Mortel `#7A7C7A` · Hoplite `#CD8032` (bronze) · Stratège `#A8A8BE` (silver) · Héros `#DAA520` (gold) · Demi-dieu `#B8E0F8` (platinum) · Olympien `#C39BD3` (diamond)
+
+### Forbidden visual moves
+- Pure white `#FFFFFF` or pure black `#000000` anywhere
+- Bright/saturated primaries (electric blue, neon green, hot pink, lime). Palette is muted, slightly dusty, like aged frescoes.
+- **Gradients of any kind** — no glow, no shimmer, no aurora, no gradient text
+- Glassmorphism, backdrop blur, frosted glass — anachronistic for the aesthetic
+- Drop shadows beyond subtle elevation (max `box-shadow: 0 1px 2px rgba(0,0,0,0.3)`)
+- Multiple accent colors on one screen
+- Glow effects, neon, sparklines as decoration
+
+### Permitted classical motifs (must be earned, never decorative)
+- Greek meander pattern at very low opacity (0.05–0.08) on card edges
+- 8-pointed Star of Vergina as accent on milestones (block completion, major PR)
+- Omega Ω as logo, used sparingly
+- ❌ No colonnades, amphoras, or "epic Greek statue" hero images. Mythology lives in **language and structure**, not skin.
+
+### Spatial language
+Negative space is sacred. Crowded screens break the ritual. Every element earns its place. Bottom 60% of the screen is for primary interactions (single-hand thumb reach); top is for status/info.
+
+### Motion
+Every interaction has weight. PR celebrations (canvas confetti + synthesized lyre via Web Audio) are **rare events**, not daily noise. No animations during set entry. Light haptic (`navigator.vibrate(10)`) on set validation gives tactile confirmation when the user can't look at the screen. Respect `prefers-reduced-motion`.
+
+---
+
+## Technical Constraints (non-negotiable)
+
+**Single-file HTML, React 18 + Babel standalone via CDN. No build step.** Mirrors the existing `mobility-dashboard` architecture and ships via Netlify drag-and-drop or Git push.
+
+**Allowed (already loaded via CDN)**:
+- React 18 UMD (`react.production.min.js`, `react-dom.production.min.js`)
+- `@babel/standalone` for in-browser JSX
+- Dexie 4.x UMD (IndexedDB wrapper)
+- canvas-confetti (lazy-loaded only on PR events)
+- Web Audio API for synthesized sounds (no audio files)
+- Inline SVG for all icons
+- Google Fonts: Plus Jakarta Sans + EB Garamond italic
+
+**Forbidden**:
+- Vite, webpack, Rollup, any bundler
+- npm/yarn/pnpm workflow, package.json dependency installs
+- TypeScript / JSX precompilation / build artifacts
+- Sass / Less / PostCSS
+- styled-components / emotion / any CSS-in-JS lib
+- Material UI / Chakra / shadcn / any component lib requiring install
+- Tailwind (the app uses raw CSS in a single `<style>` block + JSX inline styles)
+
+All visual improvements = CSS additions to the existing `<style>` block, inline-style refinements, or new self-contained React components inside the existing `<script type="text/babel">` block.
+
+The existing app lives at `/Users/damienospital/projects/odyssea/index.html` (~4000 lines).
+
+---
+
+## Accessibility & Physical Context
+
+- **Touch targets**: minimum 44×44px (Apple HIG); **56×56px in practice for primary actions** (set validation). No tiny icon buttons. No precision gestures.
+- **Contrast**: WCAG AA minimum on all functional text. Primary text `#F5F5F3` on `#0D0F0E` = 17:1 (AAA). Secondary `#7A7C7A` on `#0D0F0E` = ~5.5:1, acceptable for non-critical info but **never for action labels or numbers read mid-set**.
+- **Glance legibility**: current state must be readable in ~0.5s. No hidden state. No scroll required to see the active set.
+- **Single-handed thumb reach**: all primary interactions in the bottom 60% of the screen.
+- **No OS keyboard during a session**: steppers (±5kg, ±2.5kg, ±1 rep) and toggles (RIR 0–5 as six tappable circles). Keyboard only in `/reglages` setup or onboarding.
+- **Destructive actions**: ≥12px away from primary actions, always confirmed. Cold/sweaty fingertips cause erratic taps.
+- **Offline-first**: full functionality (set entry, calculations, navigation) without signal. Sync to Google Sheets when connectivity returns.
+- **Haptic & sound**: haptic on set validation (sparingly, to preserve dopamine impact). Sounds optional, off by default — must add information, never decorate.
+- **Reduced motion**: `prefers-reduced-motion` respected — no parallax, no aggressive animations.
+- **Language**: French primarily, with Greek (Ὀδύσσεια and mythological terms) in EB Garamond italic.
+
+---
+
+## Design Principles
+
+1. **Le rituel avant tout.** In-session, the interface disappears. No animation, no decoration, no noise. The user's focus belongs on the bar, not the screen.
+2. **La mythologie comme architecture invisible, jamais comme décor.** Greek references live in language, structure, and semantic naming (laurel/olympus/royal/blood, Mortel→Olympien). They never appear as colonnades, statues, or surface ornament.
+3. **Chaque accent a un sens. La rareté est la puissance.** One accent per screen. Olympus gold is divine — it appears only when something divine has happened. PRs and milestones earn confetti; daily sets do not.
+4. **Lisibilité avant esthétique, mais l'esthétique suit.** Numbers readable from 50cm under fluorescent light. Tap targets sized for chalked hands. The aesthetic emerges from these constraints, not in spite of them.
+5. **Endurance, pas hype.** This app whispers "endure". It never shouts "GO HARD". Restraint is the brand.
