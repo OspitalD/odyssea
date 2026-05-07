@@ -46,6 +46,9 @@
       --accent-olympus: #E8A020;
       --accent-royal:   #B990E0;
       --accent-blood:   #E05A4A;
+      --accent-density:   #5BA8C8;
+      --accent-softamrap: #C4885A;
+      --accent-amrap:     #D47E6A;
 
       /* ─── TEXT ─── */
       --text-primary:    #F5F5F3;
@@ -706,29 +709,36 @@
   const round05 = (x) => Math.round(x * 2) / 2;
 
   const FORMAT_META = {
-    traditional: { label: 'TRAD', color: 'var(--text-secondary)' },
-    doubleProg:  { label: 'DBL PROG', color: 'var(--accent-laurel)' },
-    emom:        { label: 'EMOM', color: 'var(--accent-royal)' },
-    topBackoff:  { label: 'TOP+BO', color: 'var(--accent-olympus)' },
-    jump:        { label: 'JUMP', color: 'var(--accent-blood)' },
+    traditional: { label: 'TRAD',        color: 'var(--text-secondary)' },
+    doubleProg:  { label: 'DBL PROG',    color: 'var(--accent-laurel)' },
+    emom:        { label: 'EMOM',        color: 'var(--accent-royal)' },
+    density:     { label: 'DENSITY',     color: 'var(--accent-density)' },
+    topBackoff:  { label: 'TOP+BO',      color: 'var(--accent-olympus)' },
+    softAmrap:   { label: 'SOFT AMRAP',  color: 'var(--accent-softamrap)' },
+    amrap:       { label: 'AMRAP',       color: 'var(--accent-amrap)' },
+    jump:        { label: 'JUMP',        color: 'var(--accent-blood)' },
   };
 
-  // Format detection — ordre de précédence strict, premier match gagne
-  // Vérifie prescription + nom d'exo (les sheets mettent souvent le type dans le nom)
+  // Format detection — 8 niveaux, précédence stricte, premier match gagne
   function detectFormat(prescription, exerciseName) {
     const p = (prescription || '').toLowerCase();
     const n = (exerciseName || '').toLowerCase();
-    // 1. JUMP — patterns très spécifiques, collision faible
-    if (/\b(single effort|max jump|1 max effort|broad jump|vertical jump)\b/.test(p + ' ' + n)) return 'jump';
-    // 2. EMOM / DENSITY — sans "for X min" (faux positif "rest for 2 min")
-    if (/\b(emom|every minute on the minute|density set)\b/.test(p)) return 'emom';
-    // 3. TOP SET + BACK-OFF
+    const pn = p + ' ' + n;
+    // 1. JUMP
+    if (/\b(single effort|max jump|1 max effort|broad jump|vertical jump)\b/.test(pn)) return 'jump';
+    // 2. EMOM (only — density is separate)
+    if (/\b(emom|every minute on the minute)\b/.test(p)) return 'emom';
+    // 3. DENSITY
+    if (/\bdensity set\b/.test(p)) return 'density';
+    // 4. TOP SET + BACK-OFF
     if (/\b(top set|work up to|1\s*set\s*to\s*failure)\b/.test(p) || /\d+\s*[x×]\s*\d+\s*@\s*rpe\s*\d+\s*then\s+\d+\s*[x×]\s*\d+/.test(p)) return 'topBackoff';
-    // Risque false positive sur tradi avec last set AMRAP — override manuel disponible
-    if (/\bamrap\b/.test(p)) return 'topBackoff';
-    // 4. DOUBLE PROG — double condition requise (range + mention)
+    // 5. SOFT AMRAP (before amrap — "soft amrap" contains "amrap")
+    if (/\bsoft amrap\b/.test(p)) return 'softAmrap';
+    // 6. AMRAP
+    if (/\b(true amrap|amrap set)\b/.test(p) || /followed by.*amrap/i.test(p) || /\bamrap\b/.test(p)) return 'amrap';
+    // 7. DOUBLE PROG — double condition (range + mention)
     if (/\d+\s*[-–]\s*\d+\s*reps?/.test(p) && /\b(double progression|rep range)\b/.test(p)) return 'doubleProg';
-    // 5. TRADITIONAL — fallback
+    // 8. TRADITIONAL — fallback
     return 'traditional';
   }
 
@@ -745,6 +755,37 @@
   function parseDuration(prescription) {
     const m = (prescription || '').match(/(\d+)\s*min/i);
     return m ? parseInt(m[1], 10) : null;
+  }
+
+  function parseBackoffPercent(prescription) {
+    if (!prescription) return null;
+    const p = prescription.toLowerCase();
+    // "strip 5-10%" or "drop 10%"
+    const stripMatch = p.match(/\b(?:strip|drop|reduce)\s+(\d+)\s*[-–]?\s*(\d+)?\s*%/);
+    if (stripMatch) {
+      const lo = parseInt(stripMatch[1], 10);
+      const hi = stripMatch[2] ? parseInt(stripMatch[2], 10) : lo;
+      return { mode: 'stripWeight', percent: (lo + hi) / 2 / 100 };
+    }
+    // "take 87-93% of estimated 1RM" or "use 85% of e1RM"
+    const ofMatch = p.match(/\b(\d+)\s*[-–]?\s*(\d+)?\s*%\s*(?:of\s+)?(?:estimated\s+)?(?:1\s*rm|e1rm|one.rep.max)/);
+    if (ofMatch) {
+      const lo = parseInt(ofMatch[1], 10);
+      const hi = ofMatch[2] ? parseInt(ofMatch[2], 10) : lo;
+      return { mode: 'ofE1RM', percent: (lo + hi) / 2 / 100 };
+    }
+    return null;
+  }
+
+  function calculateSuggestedWeight(referenceWeight, backoffInfo) {
+    if (!backoffInfo || !referenceWeight) return null;
+    if (backoffInfo.mode === 'stripWeight') {
+      return round05(referenceWeight * (1 - backoffInfo.percent));
+    }
+    if (backoffInfo.mode === 'ofE1RM') {
+      return round05(referenceWeight * backoffInfo.percent);
+    }
+    return null;
   }
 
   /* ==========================================================
@@ -1058,7 +1099,7 @@
   function computeAttributes(sets, sessions, bw, anchorWeek) {
     // EMOM et Jump exclus des calculs RPG
     // TODO post-Block 1 : Bia devrait inclure les jumps via une métrique power dédiée, Pónos devrait inclure les EMOM
-    const rpgFormats = new Set([undefined, 'traditional', 'doubleProg', 'topBackoff']);
+    const rpgFormats = new Set([undefined, 'traditional', 'doubleProg', 'topBackoff', 'softAmrap', 'amrap']);
     const rpgSets = sets.filter(s => rpgFormats.has(s.format));
     const standards = computeStandards(rpgSets, bw);
 
@@ -2710,17 +2751,25 @@
      sets (14 min Squat/Bench, 10-12 min jumps).
      Sons discrets aux milestones (5, 10, 13 min).
      ========================================================== */
-  // Détection density-set / jump via prescription regex
-  function defaultTimerMinutes(prescription = '') {
-    if (/density set/i.test(prescription)) return 14;
-    if (/jump for (\d+)/i.test(prescription)) {
-      const m = prescription.match(/jump for (\d+)/i);
-      return m ? parseInt(m[1], 10) : 10;
+  function getTimerConfig(prescription, format) {
+    const p = (prescription || '').toLowerCase();
+    if (format === 'emom') {
+      const durMatch = p.match(/(\d+)\s*min/);
+      return { type: 'interval', intervalSec: 60, totalMin: durMatch ? parseInt(durMatch[1], 10) : 10 };
+    }
+    if (format === 'density') {
+      const durMatch = p.match(/(\d+)\s*min/);
+      return { type: 'countdown', minutes: durMatch ? parseInt(durMatch[1], 10) : 14 };
+    }
+    if (format === 'jump') {
+      const durMatch = p.match(/jump for (\d+)/i);
+      return { type: 'countdown', minutes: durMatch ? parseInt(durMatch[1], 10) : 10 };
     }
     return null;
   }
 
-  const Timer = ({ durationMin, onClose }) => {
+  const CountdownTimer = ({ durationMin, onClose, accentColor, showTotalReps, totalReps }) => {
+    const accent = accentColor || 'var(--accent-olympus)';
     const totalSec = durationMin * 60;
     const [elapsed, setElapsed] = useState(0);
     const [running, setRunning] = useState(true);
@@ -2733,7 +2782,6 @@
       const id = setInterval(() => {
         const e = Math.min(totalSec, Math.floor((Date.now() - start) / 1000));
         setElapsed(e);
-        // Sons milestone
         for (const ms of milestones) {
           if (e >= ms && lastTickRef.current < ms) {
             lastTickRef.current = ms;
@@ -2762,55 +2810,170 @@
 
     return (
       <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: 14,
-        padding: 16,
-        background: 'var(--bg-primary)',
-        border: '1px solid var(--accent-olympus)',
-        borderRadius: 14,
-        marginBottom: 12,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14,
+        padding: 16, background: 'var(--bg-primary)', border: `1px solid ${accent}`,
+        borderRadius: 14, marginBottom: 12,
       }}>
         <svg width={size} height={size}>
           <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border-subtle)" strokeWidth="6" />
           <circle cx={size/2} cy={size/2} r={r} fill="none"
-                  stroke="var(--accent-olympus)" strokeWidth="6" strokeLinecap="round"
+                  stroke={accent} strokeWidth="6" strokeLinecap="round"
                   strokeDasharray={C} strokeDashoffset={dashOffset}
                   transform={`rotate(-90 ${size/2} ${size/2})`} />
-          <text x={size/2} y={size/2 - 4} textAnchor="middle" fill="var(--text-primary)" fontSize="26" fontWeight="800">
-            {String(min).padStart(2, '0')}:{String(sec).padStart(2, '0')}
-          </text>
-          <text x={size/2} y={size/2 + 28} textAnchor="middle" fill="var(--text-secondary)" fontSize="11" fontWeight="700" letterSpacing="2">
-            {running ? 'EN COURS' : (remaining === 0 ? 'TERMINÉ' : 'PAUSE')}
-          </text>
+          {showTotalReps ? (
+            <>
+              <text x={size/2} y={size/2 - 18} textAnchor="middle" fill={accent} fontSize="42" fontWeight="800">
+                {totalReps || 0}
+              </text>
+              <text x={size/2} y={size/2 + 8} textAnchor="middle" fill="var(--text-secondary)" fontSize="10" fontWeight="700" letterSpacing="2">
+                TOTAL REPS
+              </text>
+              <text x={size/2} y={size/2 + 30} textAnchor="middle" fill="var(--text-primary)" fontSize="16" fontWeight="700">
+                {String(min).padStart(2, '0')}:{String(sec).padStart(2, '0')}
+              </text>
+            </>
+          ) : (
+            <>
+              <text x={size/2} y={size/2 - 4} textAnchor="middle" fill="var(--text-primary)" fontSize="26" fontWeight="800">
+                {String(min).padStart(2, '0')}:{String(sec).padStart(2, '0')}
+              </text>
+              <text x={size/2} y={size/2 + 28} textAnchor="middle" fill="var(--text-secondary)" fontSize="11" fontWeight="700" letterSpacing="2">
+                {running ? 'EN COURS' : (remaining === 0 ? 'TERMINÉ' : 'PAUSE')}
+              </text>
+            </>
+          )}
         </svg>
         <div style={{ display: 'flex', gap: 10 }}>
           <button type="button" onClick={() => setRunning(r => !r)}
             style={{
-              background: 'transparent',
-              border: '1px solid var(--border-strong)',
-              borderRadius: 10,
-              color: 'var(--text-primary)',
-              padding: '10px 18px',
-              fontSize: 12,
-              fontWeight: 700,
-              textTransform: 'uppercase',
-              letterSpacing: '1px',
-              cursor: 'pointer',
+              background: 'transparent', border: '1px solid var(--border-strong)', borderRadius: 10,
+              color: 'var(--text-primary)', padding: '10px 18px', fontSize: 12, fontWeight: 700,
+              textTransform: 'uppercase', letterSpacing: '1px', cursor: 'pointer',
             }}>{running ? 'Pause' : 'Reprendre'}</button>
           <button type="button" onClick={onClose}
             style={{
-              background: 'transparent',
-              border: '1px solid var(--border-strong)',
-              borderRadius: 10,
-              color: 'var(--text-secondary)',
-              padding: '10px 18px',
-              fontSize: 12,
-              fontWeight: 700,
-              textTransform: 'uppercase',
-              letterSpacing: '1px',
-              cursor: 'pointer',
+              background: 'transparent', border: '1px solid var(--border-strong)', borderRadius: 10,
+              color: 'var(--text-secondary)', padding: '10px 18px', fontSize: 12, fontWeight: 700,
+              textTransform: 'uppercase', letterSpacing: '1px', cursor: 'pointer',
+            }}>Fermer</button>
+        </div>
+      </div>
+    );
+  };
+
+  const IntervalTimer = ({ intervalSec, totalMin, onClose, onIntervalComplete }) => {
+    const totalIntervals = Math.floor((totalMin * 60) / intervalSec);
+    const [phase, setPhase] = useState('setup');
+    const [adjustedMin, setAdjustedMin] = useState(totalMin);
+    const [elapsed, setElapsed] = useState(0);
+    const [running, setRunning] = useState(false);
+    const lastIntervalRef = React.useRef(0);
+
+    const adjustedIntervals = Math.floor((adjustedMin * 60) / intervalSec);
+    const totalSec = adjustedMin * 60;
+    const currentInterval = Math.min(adjustedIntervals, Math.floor(elapsed / intervalSec) + 1);
+    const elapsedInInterval = elapsed % intervalSec;
+    const remainingInInterval = intervalSec - elapsedInInterval;
+    const progress = elapsedInInterval / intervalSec;
+
+    useEffect(() => {
+      if (phase !== 'running' || !running) return;
+      const start = Date.now() - elapsed * 1000;
+      const id = setInterval(() => {
+        const e = Math.min(totalSec, Math.floor((Date.now() - start) / 1000));
+        setElapsed(e);
+        const curInt = Math.floor(e / intervalSec);
+        if (curInt > lastIntervalRef.current && curInt < adjustedIntervals) {
+          lastIntervalRef.current = curInt;
+          play(soundTick);
+          try { navigator.vibrate && navigator.vibrate(40); } catch {}
+          if (onIntervalComplete) onIntervalComplete(curInt);
+        }
+        if (e >= totalSec) {
+          clearInterval(id);
+          setRunning(false);
+          play(soundBell);
+          try { navigator.vibrate && navigator.vibrate([60, 40, 80]); } catch {}
+        }
+      }, 250);
+      return () => clearInterval(id);
+    }, [phase, running, totalSec, intervalSec, adjustedIntervals]);
+
+    const size = 200;
+    const r = (size - 16) / 2;
+    const C = 2 * Math.PI * r;
+    const dashOffset = C * (1 - progress);
+    const accent = 'var(--accent-royal)';
+    const done = elapsed >= totalSec;
+
+    if (phase === 'setup') {
+      return (
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14,
+          padding: 16, background: 'var(--bg-primary)', border: `1px solid ${accent}`,
+          borderRadius: 14, marginBottom: 12,
+        }}>
+          <div style={{ fontSize: 11, color: accent, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+            EMOM — {adjustedIntervals} sets × {intervalSec}s
+          </div>
+          <Stepper value={adjustedMin} onChange={setAdjustedMin} steps={[-1, +1]} unit="min" min={1} max={30} fontSize={32} />
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button type="button" onClick={() => { setPhase('running'); setRunning(true); }}
+              style={{
+                background: accent, border: 'none', borderRadius: 10, color: '#0D0F0E',
+                padding: '12px 24px', fontSize: 13, fontWeight: 800, textTransform: 'uppercase',
+                letterSpacing: '1.2px', cursor: 'pointer',
+              }}>Démarrer</button>
+            <button type="button" onClick={onClose}
+              style={{
+                background: 'transparent', border: '1px solid var(--border-strong)', borderRadius: 10,
+                color: 'var(--text-secondary)', padding: '12px 18px', fontSize: 12, fontWeight: 700,
+                textTransform: 'uppercase', letterSpacing: '1px', cursor: 'pointer',
+              }}>Fermer</button>
+          </div>
+        </div>
+      );
+    }
+
+    const rMin = Math.floor(remainingInInterval / 60);
+    const rSec = remainingInInterval % 60;
+
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14,
+        padding: 16, background: 'var(--bg-primary)', border: `1px solid ${accent}`,
+        borderRadius: 14, marginBottom: 12,
+      }}>
+        <div style={{ fontSize: 11, color: accent, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+          SET {currentInterval}/{adjustedIntervals} · EMOM
+        </div>
+        <svg width={size} height={size}>
+          <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border-subtle)" strokeWidth="6" />
+          <circle cx={size/2} cy={size/2} r={r} fill="none"
+                  stroke={accent} strokeWidth="6" strokeLinecap="round"
+                  strokeDasharray={C} strokeDashoffset={dashOffset}
+                  transform={`rotate(-90 ${size/2} ${size/2})`} />
+          <text x={size/2} y={size/2 - 4} textAnchor="middle" fill="var(--text-primary)" fontSize="26" fontWeight="800">
+            {done ? 'FIN' : `${String(rMin).padStart(2, '0')}:${String(rSec).padStart(2, '0')}`}
+          </text>
+          <text x={size/2} y={size/2 + 28} textAnchor="middle" fill="var(--text-secondary)" fontSize="11" fontWeight="700" letterSpacing="2">
+            {done ? 'TERMINÉ' : (running ? 'EN COURS' : 'PAUSE')}
+          </text>
+        </svg>
+        <div style={{ display: 'flex', gap: 10 }}>
+          {!done && (
+            <button type="button" onClick={() => setRunning(r => !r)}
+              style={{
+                background: 'transparent', border: '1px solid var(--border-strong)', borderRadius: 10,
+                color: 'var(--text-primary)', padding: '10px 18px', fontSize: 12, fontWeight: 700,
+                textTransform: 'uppercase', letterSpacing: '1px', cursor: 'pointer',
+              }}>{running ? 'Pause' : 'Reprendre'}</button>
+          )}
+          <button type="button" onClick={onClose}
+            style={{
+              background: 'transparent', border: '1px solid var(--border-strong)', borderRadius: 10,
+              color: 'var(--text-secondary)', padding: '10px 18px', fontSize: 12, fontWeight: 700,
+              textTransform: 'uppercase', letterSpacing: '1px', cursor: 'pointer',
             }}>Fermer</button>
         </div>
       </div>
@@ -2870,8 +3033,12 @@
     const fmtMeta = FORMAT_META[format] || FORMAT_META.traditional;
     const isVerticalJump = format === 'jump' && !/\bbroad\b/i.test(ex.prescription || '');
     const [showFormatDropdown, setShowFormatDropdown] = useState(false);
-    // Commit 1 : seuls traditional et jump sont implémentés — le reste fallback tradi
-    const effectiveFormat = format === 'jump' ? 'jump' : 'traditional';
+    const [densityTotalReps, setDensityTotalReps] = useState(() => {
+      if (format === 'density' && sets && sets.length > 0) {
+        return sets.reduce((sum, s) => sum + (s.reps || 0), 0);
+      }
+      return 0;
+    });
 
     useEffect(() => {
       if (lastSet) {
@@ -2893,20 +3060,37 @@
     const historicalBest = useBestE1RMFor(ex.exerciseName, sets?.length || 0);
     const setsHistoricalBest = useSetsBestE1RMFor(ex.exerciseName, sets?.length || 0);
     const lastWeekBest = useLastWeekBest(ex.exerciseName, week);
-    const timerMinutes = effectiveFormat !== 'jump' ? defaultTimerMinutes(ex.prescription || '') : null;
+    const timerConfig = getTimerConfig(ex.prescription || '', format);
     const [timerOpen, setTimerOpen] = useState(false);
-    const previewE1RM = effectiveFormat !== 'jump' && weight > 0 && reps > 0 ? round05(epley(weight, reps)) : 0;
-    const previewSI = effectiveFormat !== 'jump' && weight > 0 && reps > 0 ? stressIndex(weight, reps, rir, historicalBest || previewE1RM) : 0;
+    const hasWeightInput = format !== 'jump';
+    const previewE1RM = hasWeightInput && weight > 0 && reps > 0 ? round05(epley(weight, reps)) : 0;
+    const previewSI = hasWeightInput && weight > 0 && reps > 0 ? stressIndex(weight, reps, rir, historicalBest || previewE1RM) : 0;
     const sessionVL = volumeLoad(sets || []);
     const sessionBest = bestE1RM(sets || []);
 
     const nextSetNumber = (sets?.length || 0) + 1;
-    const isPreviewPR = effectiveFormat !== 'jump' && setsHistoricalBest != null && setsHistoricalBest > 0 && previewE1RM > setsHistoricalBest;
+    const isPreviewPR = hasWeightInput && setsHistoricalBest != null && setsHistoricalBest > 0 && previewE1RM > setsHistoricalBest;
+
+    const backoffInfo = parseBackoffPercent(ex.prescription);
+    const topSetInSession = sets && sets.length > 0 ? sets.reduce((best, s) => (s.e1RM > (best?.e1RM || 0) ? s : best), null) : null;
+    const suggestedWeight = useMemo(() => {
+      if (!backoffInfo) return null;
+      if (backoffInfo.mode === 'stripWeight' && topSetInSession?.weight) {
+        return calculateSuggestedWeight(topSetInSession.weight, backoffInfo);
+      }
+      if (backoffInfo.mode === 'ofE1RM' && historicalBest) {
+        return calculateSuggestedWeight(historicalBest, backoffInfo);
+      }
+      return null;
+    }, [backoffInfo, topSetInSession?.weight, topSetInSession?.e1RM, historicalBest]);
+
+    const isTopSet = (format === 'topBackoff' || format === 'softAmrap') && nextSetNumber === 1;
+    const isBackOff = (format === 'topBackoff' || format === 'softAmrap') && nextSetNumber > 1;
 
     const [flash, setFlash] = useState(false);
 
     const validate = async () => {
-      if (effectiveFormat === 'jump') {
+      if (format === 'jump') {
         const measurement = isVerticalJump ? jumpHeight : jumpDistance;
         if (!measurement || measurement <= 0) return;
         await db.sets.add({
@@ -2928,10 +3112,33 @@
         onSetValidated();
         return;
       }
+      if (format === 'density') {
+        if (reps <= 0) return;
+        const newTotal = densityTotalReps + reps;
+        setDensityTotalReps(newTotal);
+        await db.sets.add({
+          week, sessionDay,
+          exerciseSlot: ex.exerciseSlot,
+          exerciseName: ex.exerciseName,
+          setNumber: nextSetNumber,
+          format: 'density',
+          weight: weight || null, reps, rir: null, e1RM: null, isPR: false,
+          totalReps: newTotal,
+          completedAt: new Date().toISOString(),
+          syncedAt: null,
+        });
+        try { navigator.vibrate && navigator.vibrate(20); } catch {}
+        checkBadges().then(newly => { if (newly.length) onBadgesUnlocked(newly); });
+        setFlash(true);
+        setTimeout(() => setFlash(false), 250);
+        onSetValidated();
+        return;
+      }
       if (weight <= 0 || reps <= 0) return;
       const e1RM = round05(epley(weight, reps));
-      const isPR = setsHistoricalBest != null && setsHistoricalBest > 0 && e1RM > setsHistoricalBest;
-      await db.sets.add({
+      const rpgEligible = new Set(['traditional', 'doubleProg', 'topBackoff', 'softAmrap', 'amrap']);
+      const isPR = rpgEligible.has(format) && setsHistoricalBest != null && setsHistoricalBest > 0 && e1RM > setsHistoricalBest;
+      const setData = {
         week, sessionDay,
         exerciseSlot: ex.exerciseSlot,
         exerciseName: ex.exerciseName,
@@ -2940,7 +3147,13 @@
         weight, reps, rir, e1RM, isPR,
         completedAt: new Date().toISOString(),
         syncedAt: null,
-      });
+      };
+      if (format === 'topBackoff' || format === 'softAmrap') {
+        setData.isTopSet = isTopSet;
+        setData.isBackOff = isBackOff;
+        if (suggestedWeight) setData.suggestedWeight = suggestedWeight;
+      }
+      await db.sets.add(setData);
       try { navigator.vibrate && navigator.vibrate(isPR ? [30, 50, 60] : 20); } catch {}
       if (isPR) { fireConfetti(); play(soundLyre); }
       checkBadges().then(newly => { if (newly.length) onBadgesUnlocked(newly); });
@@ -2950,6 +3163,7 @@
     };
 
     const renderSetBadge = (s) => {
+      const sFmt = FORMAT_META[s.format] || FORMAT_META.traditional;
       if (s.format === 'jump') {
         const val = s.jumpHeight != null ? `${s.jumpHeight} cm` : `${s.jumpDistance} m`;
         return (
@@ -2963,6 +3177,22 @@
           </li>
         );
       }
+      if (s.format === 'density') {
+        return (
+          <li key={s.id} style={{
+            display: 'flex', alignItems: 'center', gap: 10, fontSize: 13,
+            padding: '8px 12px', background: 'var(--bg-primary)',
+            border: '1px solid var(--border-subtle)', borderRadius: 10,
+          }}>
+            <span style={{ color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 700, minWidth: 24 }}>#{s.setNumber}</span>
+            <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{s.weight ? `${s.weight} kg` : ''}</span>
+            <span style={{ color: 'var(--accent-density)', fontWeight: 700 }}>{s.reps} reps</span>
+            <span style={{ flex: 1 }} />
+            {s.totalReps && <span style={{ color: 'var(--accent-density)', fontSize: 11, fontWeight: 700 }}>total: {s.totalReps}</span>}
+          </li>
+        );
+      }
+      const prefix = s.isTopSet ? 'TOP' : s.isBackOff ? 'BO' : null;
       return (
         <li key={s.id} style={{
           display: 'flex', alignItems: 'center', gap: 10, fontSize: 13,
@@ -2971,13 +3201,15 @@
           border: `1px solid ${s.isPR ? 'rgba(232,160,32,0.4)' : 'var(--border-subtle)'}`,
           borderRadius: 10,
         }}>
-          <span style={{ color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 700, minWidth: 24 }}>#{s.setNumber}</span>
+          <span style={{ color: 'var(--text-tertiary)', fontSize: 11, fontWeight: 700, minWidth: 24 }}>
+            {prefix ? <span style={{ color: sFmt.color, fontSize: 9, fontWeight: 800 }}>{prefix} </span> : ''}#{s.setNumber}
+          </span>
           <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{s.weight} kg</span>
           <span style={{ color: 'var(--text-secondary)' }}>×{s.reps}</span>
-          <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>RIR {s.rir}</span>
+          {s.rir != null && <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>RIR {s.rir}</span>}
           <span style={{ flex: 1 }} />
           {s.isPR && <span style={{ color: 'var(--accent-olympus)', fontSize: 13, fontWeight: 800 }} title="PR — nouvel e1RM record">★</span>}
-          <span style={{ color: s.isPR ? 'var(--accent-olympus)' : 'var(--accent-laurel)', fontSize: 11, fontWeight: 700 }}>e1RM {s.e1RM}</span>
+          {s.e1RM && <span style={{ color: s.isPR ? 'var(--accent-olympus)' : 'var(--accent-laurel)', fontSize: 11, fontWeight: 700 }}>e1RM {s.e1RM}</span>}
         </li>
       );
     };
@@ -3055,6 +3287,264 @@
       </div>
     );
 
+    const renderEmomInput = () => (
+      <div ref={setEntryRef}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: 'var(--accent-royal)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+            Set {nextSetNumber} · EMOM
+          </div>
+          {previewE1RM > 0 && (
+            <div style={{ fontSize: 11, color: isPreviewPR ? 'var(--accent-olympus)' : 'var(--text-secondary)', fontWeight: 700 }}>
+              {isPreviewPR && '★ '}e1RM {previewE1RM}
+            </div>
+          )}
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+          <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Reps</div>
+          <Stepper value={reps} onChange={setReps} steps={[-1, +1]} unit="" max={99} fontSize={24} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>RIR · reps en réserve</div>
+          <RirToggle value={rir} onChange={setRir} />
+        </div>
+        <button type="button" onClick={validate} disabled={weight <= 0 || reps <= 0}
+          style={{
+            width: '100%',
+            background: flash ? 'var(--text-primary)' : (weight > 0 && reps > 0 ? 'var(--accent-royal)' : 'var(--bg-surface-hover)'),
+            color: flash ? '#0D0F0E' : (weight > 0 && reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
+            border: 'none', borderRadius: 12, minHeight: 56, padding: '18px 0',
+            fontSize: 14, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase',
+            cursor: weight > 0 && reps > 0 ? 'pointer' : 'not-allowed',
+            transform: flash ? 'scale(0.98)' : 'scale(1)',
+          }}>Valider set</button>
+      </div>
+    );
+
+    const renderDensityInput = () => (
+      <div ref={setEntryRef}>
+        <div style={{ fontSize: 11, color: 'var(--accent-density)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 10 }}>
+          Mini-set {nextSetNumber} · DENSITY
+        </div>
+        {weight > 0 && (
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+            <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={24} />
+          </div>
+        )}
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Reps ce mini-set</div>
+          <Stepper value={reps} onChange={setReps} steps={[-1, +1]} unit="" max={99} fontSize={32} />
+        </div>
+        <button type="button" onClick={validate} disabled={reps <= 0}
+          style={{
+            width: '100%',
+            background: flash ? 'var(--text-primary)' : (reps > 0 ? 'var(--accent-density)' : 'var(--bg-surface-hover)'),
+            color: flash ? '#0D0F0E' : (reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
+            border: 'none', borderRadius: 12, minHeight: 56, padding: '18px 0',
+            fontSize: 14, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase',
+            cursor: reps > 0 ? 'pointer' : 'not-allowed',
+            transform: flash ? 'scale(0.98)' : 'scale(1)',
+          }}>Valider mini-set</button>
+      </div>
+    );
+
+    const renderDoubleProgInput = () => {
+      const repRange = parseRepRange(ex.prescription);
+      const atTop = repRange && reps >= repRange[1];
+      return (
+        <div ref={setEntryRef}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: 'var(--accent-laurel)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+              Set {nextSetNumber} · DBL PROG
+            </div>
+            {previewE1RM > 0 && (
+              <div style={{ fontSize: 11, color: isPreviewPR ? 'var(--accent-olympus)' : 'var(--text-secondary)', fontWeight: 700 }}>
+                {isPreviewPR && '★ '}e1RM {previewE1RM} · SI {previewSI.toFixed(2)}
+              </div>
+            )}
+          </div>
+          {repRange && (
+            <div style={{
+              fontSize: 11, color: atTop ? 'var(--accent-laurel)' : 'var(--text-secondary)',
+              background: atTop ? 'rgba(62,207,160,0.08)' : 'var(--bg-primary)',
+              border: `1px solid ${atTop ? 'rgba(62,207,160,0.3)' : 'var(--border-subtle)'}`,
+              borderRadius: 8, padding: '6px 10px', marginBottom: 10, fontWeight: 700,
+            }}>
+              {atTop ? '⬆ BORNE HAUTE ATTEINTE — augmenter le poids' : `Rep range : ${repRange[0]}–${repRange[1]} reps`}
+            </div>
+          )}
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+            <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Reps</div>
+            <Stepper value={reps} onChange={setReps} steps={[-1, +1]} unit="" max={99} fontSize={24} />
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>RIR · reps en réserve</div>
+            <RirToggle value={rir} onChange={setRir} />
+          </div>
+          <button type="button" onClick={validate} disabled={weight <= 0 || reps <= 0}
+            style={{
+              width: '100%',
+              background: flash ? 'var(--text-primary)' : (weight > 0 && reps > 0 ? 'var(--accent-laurel)' : 'var(--bg-surface-hover)'),
+              color: flash ? '#0D0F0E' : (weight > 0 && reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
+              border: 'none', borderRadius: 12, minHeight: 56, padding: '18px 0',
+              fontSize: 14, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase',
+              cursor: weight > 0 && reps > 0 ? 'pointer' : 'not-allowed',
+              transform: flash ? 'scale(0.98)' : 'scale(1)',
+            }}>Valider set</button>
+        </div>
+      );
+    };
+
+    const renderTopBackoffInput = () => (
+      <div ref={setEntryRef}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: 'var(--accent-olympus)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+            {isTopSet ? `TOP SET ${nextSetNumber}` : `BACK-OFF ${nextSetNumber}`}
+          </div>
+          {previewE1RM > 0 && (
+            <div style={{ fontSize: 11, color: isPreviewPR ? 'var(--accent-olympus)' : 'var(--text-secondary)', fontWeight: 700 }}>
+              {isPreviewPR && '★ '}e1RM {previewE1RM} · SI {previewSI.toFixed(2)}
+            </div>
+          )}
+        </div>
+        {isBackOff && suggestedWeight && (
+          <div style={{
+            fontSize: 11, color: 'var(--accent-olympus)', background: 'rgba(232,160,32,0.06)',
+            border: '1px solid rgba(232,160,32,0.2)', borderRadius: 8,
+            padding: '6px 10px', marginBottom: 10, fontWeight: 600,
+          }}>
+            ~{suggestedWeight} kg suggéré ({backoffInfo.mode === 'stripWeight' ? `strip ${Math.round(backoffInfo.percent * 100)}%` : `${Math.round(backoffInfo.percent * 100)}% e1RM`})
+          </div>
+        )}
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+          <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Reps</div>
+          <Stepper value={reps} onChange={setReps} steps={[-1, +1]} unit="" max={99} fontSize={24} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>RIR · reps en réserve</div>
+          <RirToggle value={rir} onChange={setRir} />
+        </div>
+        <button type="button" onClick={validate} disabled={weight <= 0 || reps <= 0}
+          style={{
+            width: '100%',
+            background: flash ? 'var(--text-primary)' : (weight > 0 && reps > 0 ? 'var(--accent-olympus)' : 'var(--bg-surface-hover)'),
+            color: flash ? '#0D0F0E' : (weight > 0 && reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
+            border: 'none', borderRadius: 12, minHeight: 56, padding: '18px 0',
+            fontSize: 14, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase',
+            cursor: weight > 0 && reps > 0 ? 'pointer' : 'not-allowed',
+            transform: flash ? 'scale(0.98)' : 'scale(1)',
+          }}>Valider set</button>
+      </div>
+    );
+
+    const renderSoftAmrapInput = () => (
+      <div ref={setEntryRef}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: 'var(--accent-softamrap)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+            {isTopSet ? `Set ${nextSetNumber} · SOFT AMRAP` : `Set ${nextSetNumber} · SOFT AMRAP`}
+          </div>
+          {previewE1RM > 0 && (
+            <div style={{ fontSize: 11, color: isPreviewPR ? 'var(--accent-olympus)' : 'var(--text-secondary)', fontWeight: 700 }}>
+              {isPreviewPR && '★ '}e1RM {previewE1RM} · SI {previewSI.toFixed(2)}
+            </div>
+          )}
+        </div>
+        {isBackOff && suggestedWeight && (
+          <div style={{
+            fontSize: 11, color: 'var(--accent-softamrap)', background: 'rgba(196,136,90,0.08)',
+            border: '1px solid rgba(196,136,90,0.25)', borderRadius: 8,
+            padding: '6px 10px', marginBottom: 10, fontWeight: 600,
+          }}>
+            ~{suggestedWeight} kg suggéré ({backoffInfo.mode === 'stripWeight' ? `strip ${Math.round(backoffInfo.percent * 100)}%` : `${Math.round(backoffInfo.percent * 100)}% e1RM`})
+          </div>
+        )}
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+          <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Reps</div>
+          <Stepper value={reps} onChange={setReps} steps={[-1, +1]} unit="" max={99} fontSize={24} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>RIR · reps en réserve</div>
+          <RirToggle value={rir} onChange={setRir} />
+        </div>
+        <button type="button" onClick={validate} disabled={weight <= 0 || reps <= 0}
+          style={{
+            width: '100%',
+            background: flash ? 'var(--text-primary)' : (weight > 0 && reps > 0 ? 'var(--accent-softamrap)' : 'var(--bg-surface-hover)'),
+            color: flash ? '#0D0F0E' : (weight > 0 && reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
+            border: 'none', borderRadius: 12, minHeight: 56, padding: '18px 0',
+            fontSize: 14, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase',
+            cursor: weight > 0 && reps > 0 ? 'pointer' : 'not-allowed',
+            transform: flash ? 'scale(0.98)' : 'scale(1)',
+          }}>Valider set</button>
+      </div>
+    );
+
+    const renderAmrapInput = () => (
+      <div ref={setEntryRef}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: 'var(--accent-amrap)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+            Set {nextSetNumber} · AMRAP
+          </div>
+          {previewE1RM > 0 && (
+            <div style={{ fontSize: 11, color: isPreviewPR ? 'var(--accent-olympus)' : 'var(--text-secondary)', fontWeight: 700 }}>
+              {isPreviewPR && '★ '}e1RM {previewE1RM} · SI {previewSI.toFixed(2)}
+            </div>
+          )}
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+          <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Reps</div>
+          <Stepper value={reps} onChange={setReps} steps={[-1, +1]} unit="" max={99} fontSize={24} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 6 }}>RIR · reps en réserve</div>
+          <RirToggle value={rir} onChange={setRir} />
+        </div>
+        <button type="button" onClick={validate} disabled={weight <= 0 || reps <= 0}
+          style={{
+            width: '100%',
+            background: flash ? 'var(--text-primary)' : (weight > 0 && reps > 0 ? 'var(--accent-amrap)' : 'var(--bg-surface-hover)'),
+            color: flash ? '#0D0F0E' : (weight > 0 && reps > 0 ? '#0D0F0E' : 'var(--text-tertiary)'),
+            border: 'none', borderRadius: 12, minHeight: 56, padding: '18px 0',
+            fontSize: 14, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase',
+            cursor: weight > 0 && reps > 0 ? 'pointer' : 'not-allowed',
+            transform: flash ? 'scale(0.98)' : 'scale(1)',
+          }}>Valider set</button>
+      </div>
+    );
+
+    const renderFormatInput = () => {
+      switch (format) {
+        case 'jump':       return renderJumpInput();
+        case 'emom':       return renderEmomInput();
+        case 'density':    return renderDensityInput();
+        case 'doubleProg': return renderDoubleProgInput();
+        case 'topBackoff': return renderTopBackoffInput();
+        case 'softAmrap':  return renderSoftAmrapInput();
+        case 'amrap':      return renderAmrapInput();
+        default:           return renderTraditionalInput();
+      }
+    };
+
     return (
       <Card style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
         <button type="button" onClick={onToggle}
@@ -3130,19 +3620,23 @@
               }}>{convertLbsToKg(ex.prescription)}</div>
             )}
 
-            {timerMinutes !== null && effectiveFormat !== 'jump' && (
+            {timerConfig && (
               <div style={{ marginBottom: 12 }}>
                 {!timerOpen ? (
                   <button type="button" onClick={() => setTimerOpen(true)}
                     style={{
                       width: '100%', background: 'transparent',
-                      border: '1px dashed var(--accent-olympus)', borderRadius: 10,
-                      color: 'var(--accent-olympus)', padding: '10px 12px',
+                      border: `1px dashed ${fmtMeta.color}`, borderRadius: 10,
+                      color: fmtMeta.color, padding: '10px 12px',
                       fontSize: 12, fontWeight: 700, letterSpacing: '1.2px',
                       textTransform: 'uppercase', cursor: 'pointer',
-                    }}>⏱ Démarrer timer · {timerMinutes} min</button>
+                    }}>⏱ {timerConfig.type === 'interval' ? `EMOM · ${timerConfig.totalMin} min` : `Démarrer timer · ${timerConfig.minutes} min`}</button>
+                ) : timerConfig.type === 'interval' ? (
+                  <IntervalTimer intervalSec={timerConfig.intervalSec} totalMin={timerConfig.totalMin} onClose={() => setTimerOpen(false)} />
                 ) : (
-                  <Timer durationMin={timerMinutes} onClose={() => setTimerOpen(false)} />
+                  <CountdownTimer durationMin={timerConfig.minutes} onClose={() => setTimerOpen(false)}
+                    accentColor={fmtMeta.color}
+                    showTotalReps={format === 'density'} totalReps={densityTotalReps} />
                 )}
               </div>
             )}
@@ -3176,7 +3670,7 @@
               </div>
             )}
 
-            {effectiveFormat !== 'jump' && sets && sets.length > 0 && (
+            {hasWeightInput && format !== 'density' && sets && sets.length > 0 && (
               <div style={{
                 display: 'flex', gap: 12, fontSize: 12, color: 'var(--text-secondary)',
                 marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border-subtle)',
@@ -3198,7 +3692,7 @@
               </ul>
             )}
 
-            {effectiveFormat === 'jump' ? renderJumpInput() : renderTraditionalInput()}
+            {renderFormatInput()}
           </div>
         )}
       </Card>
