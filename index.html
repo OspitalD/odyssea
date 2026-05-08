@@ -6983,6 +6983,25 @@
     const [pingState, setPingState] = useState({ status: 'idle', msg: '' });
     const [bodyweight, setBodyweight] = useState('');
     const [bwSaved, setBwSaved] = useState(false);
+    const [resyncState, setResyncState] = useState({ status: 'idle', msg: '' });
+    const [resyncConfirm, setResyncConfirm] = useState(false);
+
+    const doResync = async () => {
+      setResyncConfirm(false);
+      setResyncState({ status: 'loading', msg: 'RESYNC...' });
+      try {
+        await db.programme.clear();
+        seedInFlight = null;
+        const result = await seedIfEmpty();
+        if (result.ok) {
+          setResyncState({ status: 'ok', msg: `Programme rechargé · ${result.count} exercices` });
+        } else {
+          setResyncState({ status: 'err', msg: result.error || 'Erreur inconnue' });
+        }
+      } catch (e) {
+        setResyncState({ status: 'err', msg: 'Erreur — pas de connexion ?' });
+      }
+    };
 
     useEffect(() => {
       db.prefs.get('bodyweight').then(row => {
@@ -7263,6 +7282,51 @@
               );
             })}
           </div>
+        </Card>
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+            Programme
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 10 }}>
+            Recharge le programme des 20 semaines depuis ta sheet Google. Tes sets, 1RM, badges et streak ne sont pas affectés.
+          </div>
+          {resyncConfirm ? (
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-primary)', marginBottom: 10 }}>
+                Recharger le programme depuis la sheet ? Tes sets, 1RM, badges, streak ne sont pas affectés.
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" onClick={() => setResyncConfirm(false)}
+                  style={{
+                    flex: 1, background: 'transparent', border: '1px solid var(--border-strong)',
+                    borderRadius: 10, color: 'var(--text-secondary)', padding: '10px 14px',
+                    fontSize: 12, fontWeight: 700, letterSpacing: '0.4px', textTransform: 'uppercase', cursor: 'pointer',
+                  }}>ANNULER</button>
+                <button type="button" onClick={doResync}
+                  style={{
+                    flex: 1, background: 'var(--accent-blood)', border: 'none',
+                    borderRadius: 10, color: '#fff', padding: '10px 14px',
+                    fontSize: 12, fontWeight: 800, letterSpacing: '0.4px', textTransform: 'uppercase', cursor: 'pointer',
+                  }}>CONFIRMER</button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" onClick={() => { setResyncConfirm(true); setResyncState({ status: 'idle', msg: '' }); }}
+              disabled={resyncState.status === 'loading'}
+              style={{
+                background: 'transparent', border: '1px solid var(--border-strong)',
+                borderRadius: 10, color: resyncState.status === 'loading' ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                padding: '8px 14px', fontSize: 12, fontWeight: 700,
+                letterSpacing: '0.4px', textTransform: 'uppercase',
+                cursor: resyncState.status === 'loading' ? 'not-allowed' : 'pointer',
+              }}>{resyncState.status === 'loading' ? 'RESYNC...' : 'RESYNC PROGRAMME'}</button>
+          )}
+          {resyncState.status !== 'idle' && resyncState.status !== 'loading' && (
+            <div style={{
+              marginTop: 10, fontSize: 13,
+              color: resyncState.status === 'ok' ? 'var(--accent-laurel)' : 'var(--accent-blood)',
+            }}>{resyncState.msg}</div>
+          )}
         </Card>
         <Card style={{ marginTop: 12 }}>
           <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
