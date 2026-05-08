@@ -788,6 +788,81 @@
     return null;
   }
 
+  function parseDensityPercents(prescription) {
+    const m = (prescription || '').match(/(\d+(?:\.\d+)?)\s*[-–]?\s*(\d+(?:\.\d+)?)?\s*%/);
+    if (!m) return null;
+    const lo = parseFloat(m[1]);
+    const hi = m[2] ? parseFloat(m[2]) : lo;
+    return { lo, hi };
+  }
+
+  function parseEmomRepsTarget(prescription) {
+    const p = (prescription || '').toLowerCase();
+    const m1 = p.match(/(\d+)\s*reps?\s+(?:every|per|emom)/);
+    if (m1) return parseInt(m1[1], 10);
+    const m2 = p.match(/sets?\s+of\s+(\d+)\s*reps?/);
+    if (m2) return parseInt(m2[1], 10);
+    const m3 = p.match(/(\d+)\s*reps?\s+(?:on the minute|otm)/);
+    if (m3) return parseInt(m3[1], 10);
+    return null;
+  }
+
+  function parseEmomPercents(prescription) {
+    return parseDensityPercents(prescription);
+  }
+
+  function computeSuggestions(sourceWeek, sessionDay, exerciseSlot, exerciseName, format, prescription, sets) {
+    if (sourceWeek < 1 || !sets || sets.length === 0) return null;
+
+    switch (format) {
+      case 'density': {
+        const lastWeight = sets[sets.length - 1]?.weight;
+        if (!lastWeight) return null;
+        const finalTotalReps = sets.reduce((sum, s) => sum + (s.reps || 0), 0);
+        if (finalTotalReps > 25) return { suggestedWeight: round05(lastWeight + 7.5), suggestedReps: null, delta: '+7.5 kg', rule: 'density_>25reps_+7.5kg' };
+        if (finalTotalReps >= 20) return { suggestedWeight: round05(lastWeight + 2.5), suggestedReps: null, delta: '+2.5 kg', rule: 'density_20-25reps_+2.5kg' };
+        return { suggestedWeight: lastWeight, suggestedReps: null, delta: 'même charge', rule: 'density_<20reps_sameload_morereps' };
+      }
+      case 'doubleProg': {
+        const range = parseRepRange(prescription);
+        if (!range) return null;
+        const lastWeight = sets[sets.length - 1]?.weight;
+        if (!lastWeight) return null;
+        const allAtTop = sets.every(s => (s.reps || 0) >= range[1]);
+        if (allAtTop) return { suggestedWeight: round05(lastWeight + 5), suggestedReps: null, delta: '+5 kg', rule: 'doubleProg_topRange_+5kg' };
+        return { suggestedWeight: lastWeight, suggestedReps: 'morereps', delta: 'même charge', rule: 'doubleProg_belowRange_morereps' };
+      }
+      case 'topBackoff': {
+        const topSets = sets.filter(s => s.isTopSet);
+        if (topSets.length === 0) return null;
+        const topWeight = Math.max(...topSets.map(s => s.weight || 0));
+        const hasPR = topSets.some(s => s.isPR);
+        if (hasPR) return { suggestedWeight: round05(topWeight + 2.5), suggestedReps: null, delta: '+2.5 kg', rule: 'topBackoff_PR_+2.5kg' };
+        return { suggestedWeight: topWeight, suggestedReps: null, delta: 'même charge', rule: 'topBackoff_noPR_sameload' };
+      }
+      case 'emom': {
+        const repsTarget = parseEmomRepsTarget(prescription);
+        const minutesTarget = parseDuration(prescription) || 10;
+        const lastWeight = sets[sets.length - 1]?.weight;
+        if (!repsTarget || !lastWeight) return null;
+        const allRepsAchieved = sets.every(s => (s.reps || 0) >= repsTarget);
+        const setsAchieved = sets.length >= minutesTarget;
+        if (allRepsAchieved && setsAchieved) return { suggestedWeight: round05(lastWeight + 2.5), suggestedReps: null, delta: '+2.5 kg', rule: 'emom_completed_+2.5kg' };
+        return { suggestedWeight: lastWeight, suggestedReps: null, delta: 'même charge', rule: 'emom_incomplete_sameload' };
+      }
+      case 'softAmrap': {
+        const topSet = sets.reduce((best, s) => (!best || (s.reps || 0) > (best.reps || 0)) ? s : best, null);
+        if (!topSet || !topSet.weight) return null;
+        const topReps = topSet.reps || 0;
+        if (topReps >= 12) return { suggestedWeight: round05(topSet.weight + 5), suggestedReps: null, delta: '+5 kg', rule: 'softAmrap_12+_+5kg' };
+        if (topReps >= 10) return { suggestedWeight: round05(topSet.weight + 2.5), suggestedReps: null, delta: '+2.5 kg', rule: 'softAmrap_10-12_+2.5kg' };
+        return { suggestedWeight: topSet.weight, suggestedReps: 'morereps', delta: 'même charge', rule: 'softAmrap_<10_sameload' };
+      }
+      default:
+        return null;
+    }
+  }
+
   /* ==========================================================
      DATA LAYER — Dexie / IndexedDB (SPEC v5 §9)
      Schéma complet anticipé pour Phase 2 et 3 (évite migrations lourdes).
@@ -808,6 +883,10 @@
 
   db.version(2).stores({
     userSessionConfigs: 'sessionDay',
+  });
+
+  db.version(3).stores({
+    weekSuggestions: '[week+sessionDay+exerciseSlot]',
   });
 
   // Singleton de protection contre les seeds concurrents au boot.
@@ -1470,6 +1549,19 @@
       }
     }, [key]);
     return [override, setFormat, loaded];
+  };
+
+  const useSuggestion = (week, sessionDay, exerciseSlot) => {
+    const [suggestion, setSuggestion] = useState(null);
+    useEffect(() => {
+      if (!week || !sessionDay || exerciseSlot == null) return;
+      let alive = true;
+      db.weekSuggestions.get([week, sessionDay, exerciseSlot]).then(row => {
+        if (alive) setSuggestion(row || null);
+      }).catch(() => {});
+      return () => { alive = false; };
+    }, [week, sessionDay, exerciseSlot]);
+    return suggestion;
   };
 
   // Hook : Standards ATHX avec overlay des 1RM déclarés (db.oneRMs).
@@ -5056,6 +5148,7 @@
     const [showQuitModal, setShowQuitModal] = useState(false);
     // Détection : session déjà terminée par le passé sur ce jour ?
     const [sessionCompleted, setSessionCompleted] = useState(false);
+    const [strengthRecap, setStrengthRecap] = useState(null);
 
     useEffect(() => {
       const shell = document.querySelector('.app-shell');
@@ -5200,25 +5293,150 @@
         const finishedBlock = await checkBlockTransition(week);
         if (finishedBlock) setCompletedBlock(finishedBlock);
       } catch {}
+      // Compute recap stats + suggestions S+1
+      try {
+        const allSessionSets = await db.sets.where('week').equals(week).toArray()
+          .then(all => all.filter(s => s.sessionDay === day.sessionDay));
+        const volKg = allSessionSets.reduce((a, s) => a + (s.weight || 0) * (s.reps || 0), 0);
+        const totalSets = allSessionSets.length;
+        const prCount = allSessionSets.filter(s => s.isPR).length;
+        const durationMin = sessionStartedAt
+          ? Math.round((Date.now() - new Date(sessionStartedAt).getTime()) / 60000)
+          : null;
+
+        const suggestions = [];
+        if (exos && week < 20) {
+          for (const ex of exos) {
+            const slotSets = allSessionSets.filter(s => s.exerciseSlot === ex.exerciseSlot);
+            const slotFormat = slotSets[0]?.format || detectFormat(ex.prescription, ex.exerciseName);
+            const result = computeSuggestions(week, day.sessionDay, ex.exerciseSlot, ex.exerciseName, slotFormat, ex.prescription, slotSets);
+            if (result) {
+              const row = {
+                week: week + 1, sessionDay: day.sessionDay, exerciseSlot: ex.exerciseSlot,
+                exerciseName: ex.exerciseName, format: slotFormat,
+                ...result, computedAt: new Date().toISOString(), sourceWeek: week,
+              };
+              try { await db.weekSuggestions.put(row); } catch {}
+              suggestions.push(row);
+            } else {
+              suggestions.push({ exerciseName: ex.exerciseName, format: slotFormat, exerciseSlot: ex.exerciseSlot, suggestedWeight: null });
+            }
+          }
+        }
+        setStrengthRecap({ volKg, totalSets, prCount, durationMin, suggestions });
+      } catch {}
+
       // Pioche phrase et l'affiche
       const phrase = await pickEndPhrase();
       setEndPhrase(phrase);
       // Sync en arrière-plan pendant le sas de décompression
       syncPendingSets().catch(() => {});
-      // La nav est désormais déclenchée par SessionEndOverlay (mood picked
-      // ou timeout 7s) — voir handleEndComplete ci-dessous.
     };
 
     const handleEndComplete = useCallback(() => {
       setEndPhrase(null);
       setEndingSessionId(null);
       setTerminating(false);
+      setSessionActive(false);
+    }, []);
+
+    const dismissRecap = useCallback(() => {
+      setStrengthRecap(null);
       navigate(ROUTES.SEMAINE);
     }, [navigate]);
 
     // User-defined day (Tuesday / Thursday) — délégation complète.
     if (day.userDefined) {
       return <UserDefinedSessionPage sessionDay={day.sessionDay} week={week} block={block} />;
+    }
+
+    // ÉTAT D — Récap strength post-TERMINER
+    if (strengthRecap && !sessionActive) {
+      const fmtLabel = (f) => (FORMAT_META[f] || FORMAT_META.traditional).label;
+      const fmtColor = (f) => (FORMAT_META[f] || FORMAT_META.traditional).color;
+      return (
+        <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
+          <div style={{ padding: 'var(--sp-5) 0 var(--sp-3)' }}>
+            <div style={{
+              fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
+              color: 'var(--accent-laurel)', letterSpacing: '0.12em', textTransform: 'uppercase',
+            }}>
+              SÉANCE TERMINÉE · {day.fr?.toUpperCase()} · S{week}
+            </div>
+            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Inscription size="md">{block.name}</Inscription>
+              <BlockBeads total={block.weeks[1] - block.weeks[0] + 1} current={week - block.weeks[0] + 1} />
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)' }}>
+            {strengthRecap.volKg > 0 && (
+              <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+                <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent-laurel)' }}>
+                  {strengthRecap.volKg >= 1000 ? `${(strengthRecap.volKg / 1000).toFixed(1)}k` : strengthRecap.volKg}
+                </div>
+                <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>VOLUME KG</Inscription>
+              </div>
+            )}
+            {strengthRecap.totalSets > 0 && (
+              <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+                <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800 }}>{strengthRecap.totalSets}</div>
+                <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>SETS</Inscription>
+              </div>
+            )}
+            {strengthRecap.prCount > 0 && (
+              <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+                <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent-olympus)' }}>{strengthRecap.prCount}</div>
+                <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>PR BATTUS</Inscription>
+              </div>
+            )}
+            {strengthRecap.durationMin != null && (
+              <div className="ody-tablet" style={{ padding: 'var(--sp-3)', textAlign: 'center' }}>
+                <div className="ody-tactical" style={{ fontSize: 20, fontWeight: 800 }}>{strengthRecap.durationMin}</div>
+                <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>MIN</Inscription>
+              </div>
+            )}
+          </div>
+
+          {strengthRecap.suggestions && strengthRecap.suggestions.length > 0 && (
+            <div style={{ marginBottom: 'var(--sp-4)' }}>
+              <div style={{
+                fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700,
+                color: 'var(--accent-olympus)', letterSpacing: '0.12em',
+                marginBottom: 'var(--sp-3)', textTransform: 'uppercase',
+              }}>SEMAINE PROCHAINE · S{week + 1}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+                {strengthRecap.suggestions.map((s, i) => (
+                  <div key={i} className="ody-tablet" style={{
+                    padding: '12px 14px',
+                    display: 'flex', alignItems: 'center', gap: 10,
+                  }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{s.exerciseName}</div>
+                      <span style={{
+                        fontSize: 9, fontWeight: 700, fontFamily: 'var(--font-mono)',
+                        color: fmtColor(s.format), letterSpacing: '0.08em', textTransform: 'uppercase',
+                      }}>{fmtLabel(s.format)}</span>
+                    </div>
+                    {s.suggestedWeight != null ? (
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--accent-laurel)' }}>{s.suggestedWeight} kg</div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: s.delta === 'même charge' ? 'var(--text-tertiary)' : 'var(--accent-olympus)' }}>{s.delta}</div>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 13, color: 'var(--text-tertiary)', fontWeight: 700 }}>—</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <button type="button" onClick={dismissRecap}
+            className="ody-btn-primary"
+            style={{ width: '100%', minHeight: 56 }}>RETOUR</button>
+        </div>
+      );
     }
 
     // ÉTAT 2 — séance plein écran focus
