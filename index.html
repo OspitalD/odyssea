@@ -538,25 +538,6 @@
     { key: 'row',      name: 'Pendlay Row',     baseline: 80,  record: 102, history: [82, 84, 86, 88, 92] },
   ];
 
-  const SEED_SESSIONS_S5 = [
-    { id: 'S5-LUN', dayIdx: 1, kind: 'Strength 1', label: 'STR 1', glyph: 'Σ', status: 'done',     volume: 8240, duration: 52, prMarks: 1, exos: 5 },
-    { id: 'S5-MAR', dayIdx: 2, kind: null,          label: null,    glyph: null, status: 'rest',     volume: null, duration: null, prMarks: 0, exos: 0 },
-    { id: 'S5-MER', dayIdx: 3, kind: 'Energy 1',    label: 'ENG 1', glyph: 'Π', status: 'done',     volume: 4180, duration: 38, prMarks: 0, exos: 4 },
-    { id: 'S5-JEU', dayIdx: 4, kind: null,          label: null,    glyph: null, status: 'rest',     volume: null, duration: null, prMarks: 0, exos: 0 },
-    { id: 'S5-VEN', dayIdx: 5, kind: 'Strength 2',  label: 'STR 2', glyph: 'Σ', status: 'today',    volume: null, duration: null, prMarks: 0, exos: 5 },
-    { id: 'S5-SAM', dayIdx: 6, kind: 'Energy 2',    label: 'ENG 2', glyph: 'Π', status: 'upcoming', volume: null, duration: null, prMarks: 0, exos: 4 },
-    { id: 'S5-DIM', dayIdx: 7, kind: null,          label: null,    glyph: null, status: 'rest',     volume: null, duration: null, prMarks: 0, exos: 0 },
-  ];
-
-  const SEED_SLOTS_LUN = [
-    { slotIdx: 1, name: 'Back Squat',        format: 'TOP',  prescription: '1x3 @8 RPE -> 3x5 @75% backoff' },
-    { slotIdx: 2, name: 'Pause Low Incline',  format: 'DBL',  prescription: '4x5 double progression' },
-    { slotIdx: 3, name: 'Pendlay Row',        format: 'EMOM', prescription: '8 min 4 reps/min' },
-    { slotIdx: 4, name: 'Hanging Leg Raise',  format: 'DENS', prescription: 'Density 14 min max sets de 8' },
-    { slotIdx: 5, name: 'Box Jump 60cm',      format: 'JUMP', prescription: 'Jump for 10 min 3/min' },
-  ];
-
-  const inferFormat = (prescription) => (FORMAT_META[detectFormat(prescription)] || FORMAT_META.traditional).label;
 
 
   const SEED_ATHX_STANDARDS = [
@@ -972,6 +953,20 @@
       return () => { alive = false; };
     }, [week, sessionDay, tick]);
     return [bySlot, refresh];
+  };
+
+  const useWeekStats = (week) => {
+    const [stats, setStats] = useState({ volume: 0, prCount: 0, doneDays: 0, totalDays: 0, doneSessionDays: [] });
+    useEffect(() => {
+      db.sets.where('week').equals(week).toArray().then(all => {
+        const vol = all.reduce((s, r) => s + ((r.weight || 0) * (r.reps || 0)), 0);
+        const prs = all.filter(r => r.isPR).length;
+        const daySet = new Set(all.map(r => r.sessionDay));
+        const totalDays = WEEK_DAYS.filter(d => d.strength || d.userDefined).length;
+        setStats({ volume: vol, prCount: prs, doneDays: daySet.size, totalDays, doneSessionDays: [...daySet] });
+      });
+    }, [week]);
+    return stats;
   };
 
   /* ==========================================================
@@ -5568,9 +5563,8 @@
     }
 
     // ÉTAT 1 — preview brutaliste
-    const todaySession = SEED_SESSIONS_S5.find(s => s.status === 'today');
-    const todayLabel = todaySession ? todaySession.label : (day.label || 'STR 2');
-    const todayKind = todaySession ? todaySession.kind : 'Strength 2';
+    const todayLabel = day.label ? day.label.replace(/Strength (\d)/,'STR $1').replace(/Upper Body/,'UPR').split(/\s+/).slice(0, 2).join(' ').toUpperCase() : '';
+    const todayKind = day.label || '';
     return (
       <>
         <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
@@ -5621,6 +5615,7 @@
           )}
 
           {/* Inscription séance type */}
+          {(day.strength || day.userDefined) && (
           <div className="ody-tablet" style={{
             padding: 'var(--sp-4) var(--sp-5)', marginBottom: 'var(--sp-4)',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -5634,6 +5629,7 @@
             </div>
             <span className="ody-tactical" style={{ fontSize: 13 }}>{todayLabel}</span>
           </div>
+          )}
 
           {/* KPI 2×2 grid */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)' }}>
@@ -5650,11 +5646,7 @@
                   const meta = FORMAT_META[fmt] || FORMAT_META.traditional;
                   return { idx: ex.exerciseSlot, name: ex.exerciseName, formatLabel: meta.label, formatColor: meta.color, prescription: ex.prescription || '' };
                 })
-              : (!day.strength ? [] : SEED_SLOTS_LUN.map(s => {
-                  const fmt = detectFormat(s.prescription, s.name);
-                  const meta = FORMAT_META[fmt] || FORMAT_META.traditional;
-                  return { idx: s.slotIdx, name: s.name, formatLabel: meta.label, formatColor: meta.color, prescription: s.prescription };
-                }));
+              : [];
 
             if (!day.strength) return (
               <div style={{ padding: 'var(--sp-5)', textAlign: 'center', color: 'var(--text-tertiary)', border: '1px dashed var(--border-subtle)', borderRadius: 'var(--r-md)' }}>
@@ -5839,8 +5831,7 @@
     const programmeByDay = useWeekProgramme(week, useSeedTick());
     const todayIdx = getCurrentWeekDayIdx();
     const navigate = useNavigate();
-
-    // Uses FORMAT_META from top-level for consistent label/color mapping
+    const weekStats = useWeekStats(week);
 
     // Build training days from WEEK_DAYS + real programme data
     const trainingDays = WEEK_DAYS.filter(d => (d.strength || d.userDefined) && d.sessionDay).map(d => {
@@ -5862,12 +5853,10 @@
       return { ...std, gap, weekTarget, liftName: athx.name };
     }).filter(Boolean);
 
-    // Stats highlights from seed
-    const sessions = SEED_SESSIONS_S5;
-    const doneSessions = sessions.filter(s => s.status === 'done');
-    const totalVol = doneSessions.reduce((a, s) => a + (s.volume || 0), 0);
-    const totalPR = doneSessions.reduce((a, s) => a + (s.prMarks || 0), 0);
-    const totalSessions = sessions.filter(s => s.kind).length;
+    const totalVol = weekStats.volume;
+    const totalPR = weekStats.prCount;
+    const doneSessions = { length: weekStats.doneDays };
+    const totalSessions = weekStats.totalDays;
 
     return (
       <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
