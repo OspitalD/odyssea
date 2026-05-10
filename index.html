@@ -276,6 +276,24 @@
       from { transform: translateX(-100%); }
       to   { transform: translateX(100vw); }
     }
+    @keyframes pr-star-in {
+      0%   { transform: translate(-50%,-50%) scale(0) rotate(90deg); opacity: 0; }
+      70%  { transform: translate(-50%,-50%) scale(1.2) rotate(-10deg); opacity: 1; }
+      100% { transform: translate(-50%,-50%) scale(1) rotate(0deg); opacity: 1; }
+    }
+    @keyframes pr-flash {
+      0%   { opacity: 0; }
+      40%  { opacity: 0.15; }
+      100% { opacity: 0; }
+    }
+    @keyframes pr-text-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes pr-fade-out {
+      from { opacity: 1; }
+      to   { opacity: 0; }
+    }
   </style>
 </head>
 <body>
@@ -859,6 +877,10 @@
 
   db.version(4).stores({
     attributes: '++id, type, computedAt',
+  });
+
+  db.version(5).stores({
+    prs: '++id, liftKey, week, block, validatedAt',
   });
 
   // Singleton de protection contre les seeds concurrents au boot.
@@ -1753,6 +1775,40 @@
     return best;
   };
 
+  const PR_ELIGIBLE_FORMATS = new Set(['traditional', 'doubleProg', 'topBackoff', 'amrap']);
+
+  async function detectPR(newSetRow) {
+    const std = matchStandard(newSetRow.exerciseName);
+    if (!std) return { isPR: false };
+    if (!PR_ELIGIBLE_FORMATS.has(newSetRow.format)) return { isPR: false };
+    if (!newSetRow.e1RM || newSetRow.e1RM <= 0) return { isPR: false };
+    const [allSets, allOneRMs] = await Promise.all([db.sets.toArray(), db.oneRMs.toArray()]);
+    const historicalBest = allSets
+      .filter(s => std.pattern.test(s.exerciseName || '') && s.e1RM && s.id !== newSetRow.id)
+      .reduce((m, s) => Math.max(m, s.e1RM), 0);
+    const declaredBest = allOneRMs
+      .filter(r => std.pattern.test(r.exerciseName || ''))
+      .reduce((m, r) => Math.max(m, r.e1RM || r.weight || 0), 0);
+    const previousBest = Math.max(historicalBest, declaredBest);
+    const isPR = newSetRow.e1RM > previousBest;
+    return { isPR, liftKey: std.id, exerciseName: std.name, previousBest, newBest: newSetRow.e1RM };
+  }
+
+  const usePRsForSession = (startedAt, completedAt) => {
+    const [prs, setPrs] = useState([]);
+    useEffect(() => {
+      if (!startedAt) return;
+      let alive = true;
+      db.prs.toArray().then(all => {
+        if (!alive) return;
+        const end = completedAt || new Date().toISOString();
+        setPrs(all.filter(p => p.validatedAt >= startedAt && p.validatedAt <= end));
+      });
+      return () => { alive = false; };
+    }, [startedAt, completedAt]);
+    return prs;
+  };
+
   const useFormatOverride = (week, sessionDay, exerciseSlot) => {
     const key = `formatOverride_${week}_${sessionDay}_${exerciseSlot}`;
     const [override, setOverride] = useState(null);
@@ -2039,6 +2095,67 @@
             style={{animation: `halo-cascade 400ms ${i * 80}ms both`}}/>
         ))}
       </svg>
+    );
+  };
+
+  const PROverlay = ({ prDetails, onDone }) => {
+    const [visible, setVisible] = useState(true);
+    const [fadingOut, setFadingOut] = useState(false);
+    const timerRef = React.useRef(null);
+
+    useEffect(() => {
+      timerRef.current = setTimeout(() => {
+        setFadingOut(true);
+        setTimeout(() => { setVisible(false); onDone(); }, 400);
+      }, 1600);
+      return () => clearTimeout(timerRef.current);
+    }, []);
+
+    const dismiss = () => {
+      clearTimeout(timerRef.current);
+      setVisible(false);
+      onDone();
+    };
+
+    if (!visible) return null;
+    return (
+      <div onClick={dismiss} style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        pointerEvents: 'auto', cursor: 'pointer',
+        animation: fadingOut ? 'pr-fade-out 400ms forwards' : undefined,
+      }}>
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'var(--accent-olympus)',
+          animation: 'pr-flash 600ms ease-out forwards',
+          pointerEvents: 'none',
+        }} />
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%',
+          animation: 'pr-star-in 600ms ease-out forwards',
+        }}>
+          <VerginaStar size={80} color="var(--accent-olympus)" filled={true} />
+        </div>
+        <div style={{
+          marginTop: 60, textAlign: 'center',
+          animation: 'pr-text-in 200ms 200ms both ease-out',
+        }}>
+          <div style={{
+            fontFamily: "'EB Garamond', Georgia, serif", fontStyle: 'italic',
+            fontSize: 48, color: 'var(--accent-olympus)', lineHeight: 1,
+          }}>PR</div>
+          <div style={{
+            fontFamily: 'var(--font-ui)', fontSize: 18, fontWeight: 700,
+            color: 'var(--text-primary)', textTransform: 'uppercase',
+            letterSpacing: '0.08em', marginTop: 8,
+          }}>{prDetails.exerciseName}</div>
+          <div style={{
+            fontFamily: 'var(--font-ui)', fontSize: 14,
+            color: 'var(--text-secondary)', marginTop: 4,
+          }}>{prDetails.weight} kg · e1RM {prDetails.e1RM}</div>
+        </div>
+      </div>
     );
   };
 
@@ -3537,6 +3654,7 @@
     const isBackOff = (format === 'topBackoff' || format === 'softAmrap') && nextSetNumber > 1;
 
     const [flash, setFlash] = useState(false);
+    const [prOverlay, setPrOverlay] = useState(null);
 
     const validate = async () => {
       if (format === 'jump') {
@@ -3606,7 +3724,22 @@
         setData.isBackOff = isBackOff;
         if (suggestedWeight) setData.suggestedWeight = suggestedWeight;
       }
-      await db.sets.add(setData);
+      const setId = await db.sets.add(setData);
+      try {
+        const prResult = await detectPR({ ...setData, id: setId });
+        if (prResult.isPR) {
+          await db.prs.add({
+            liftKey: prResult.liftKey,
+            exerciseName: ex.exerciseName,
+            weight, reps, rir, e1RM,
+            sessionDay, week,
+            block: getCurrentBlock(week).id,
+            validatedAt: new Date().toISOString(),
+            setId,
+          });
+          setPrOverlay({ exerciseName: prResult.exerciseName, weight, e1RM });
+        }
+      } catch {}
       try { navigator.vibrate && navigator.vibrate(isPR ? [30, 50, 60] : 20); } catch {}
       if (isPR) { fireConfetti(); play(soundLyre); }
       checkBadges().then(newly => { if (newly.length) onBadgesUnlocked(newly); });
@@ -3998,7 +4131,7 @@
       }
     };
 
-    return (
+    return (<>
       <Card style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
         <button type="button" onClick={onToggle}
           style={{
@@ -4149,6 +4282,8 @@
           </div>
         )}
       </Card>
+      {prOverlay && <PROverlay prDetails={prOverlay} onDone={() => setPrOverlay(null)} />}
+    </>
     );
   };
 
@@ -5632,7 +5767,11 @@
             }
           }
         }
-        setStrengthRecap({ volKg, totalSets, prCount, durationMin, suggestions });
+        const sessionPRs = await db.prs.toArray().then(all => {
+          const start = sessionStartedAt || new Date().toISOString();
+          return all.filter(p => p.validatedAt >= start);
+        }).catch(() => []);
+        setStrengthRecap({ volKg, totalSets, prCount, durationMin, suggestions, sessionPRs });
       } catch {}
 
       // Pioche phrase et l'affiche
@@ -5706,6 +5845,31 @@
               </div>
             )}
           </div>
+
+          {strengthRecap.sessionPRs && strengthRecap.sessionPRs.length > 0 && (
+            <div style={{ marginBottom: 'var(--sp-4)' }}>
+              <div style={{
+                fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700,
+                color: 'var(--accent-olympus)', letterSpacing: '0.12em',
+                marginBottom: 'var(--sp-3)', textTransform: 'uppercase',
+              }}>PR DE LA SÉANCE</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+                {strengthRecap.sessionPRs.map((pr, i) => (
+                  <div key={i} className="ody-tablet" style={{
+                    padding: '12px 14px',
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    borderColor: 'rgba(232,160,32,0.3)',
+                  }}>
+                    <VerginaStar size={20} color="var(--accent-olympus)" />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{pr.exerciseName}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{pr.weight} kg · e1RM {pr.e1RM} kg</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {strengthRecap.suggestions && strengthRecap.suggestions.length > 0 && (
             <div style={{ marginBottom: 'var(--sp-4)' }}>
