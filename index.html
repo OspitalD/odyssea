@@ -531,21 +531,19 @@
      Utilisées pour affichage quand les données réelles sont vides.
      ========================================================== */
   const SEED_LIFTS = [
-    { key: 'squat',    name: 'Back Squat',     baseline: 135, record: 162, history: [138, 142, 145, 148, 152] },
-    { key: 'deadlift', name: 'Deadlift',       baseline: 175, record: 202, history: [178, 182, 184, 188, 192] },
-    { key: 'bench',    name: 'Bench Press',     baseline: 95,  record: 118, history: [98, 100, 102, 105, 108] },
-    { key: 'ohp',      name: 'Overhead Press',  baseline: 60,  record: 72,  history: [62, 63, 64, 66, 68] },
-    { key: 'row',      name: 'Pendlay Row',     baseline: 80,  record: 102, history: [82, 84, 86, 88, 92] },
+    { key: 'squat',    name: 'Back Squat' },
+    { key: 'deadlift', name: 'Deadlift' },
+    { key: 'bench',    name: 'Bench Press' },
+    { key: 'ohp',      name: 'Overhead Press' },
+    { key: 'row',      name: 'Pendlay Row' },
   ];
 
-
-
   const SEED_ATHX_STANDARDS = [
-    { lift: 'squat',    current: 152, target: 164, ratio: 1.85, targetRatio: 2.0 },
-    { lift: 'deadlift', current: 192, target: 205, ratio: 2.34, targetRatio: 2.5 },
-    { lift: 'bench',    current: 108, target: 123, ratio: 1.32, targetRatio: 1.5 },
-    { lift: 'ohp',      current: 68,  target: 82,  ratio: 0.83, targetRatio: 1.0 },
-    { lift: 'row',      current: 92,  target: 123, ratio: 1.12, targetRatio: 1.5 },
+    { lift: 'squat',    targetRatio: 2.0 },
+    { lift: 'deadlift', targetRatio: 2.5 },
+    { lift: 'bench',    targetRatio: 1.5 },
+    { lift: 'ohp',      targetRatio: 1.0 },
+    { lift: 'row',      targetRatio: 1.5 },
   ];
 
   const ATTRIBUTES_INFO = {
@@ -1643,6 +1641,51 @@
     return standards;
   };
 
+  const useLiftStats = (liftKey, refreshKey) => {
+    const [stats, setStats] = useState(null);
+    useEffect(() => {
+      if (!liftKey) return;
+      const std = ATHX_STANDARDS.find(s => s.id === liftKey);
+      if (!std) return;
+      let alive = true;
+      Promise.all([db.sets.toArray(), db.oneRMs.toArray()]).then(([allSets, allOneRMs]) => {
+        if (!alive) return;
+        const matchedSets = allSets.filter(s => std.pattern.test(s.exerciseName || '') && s.e1RM);
+        const setsBestE1RM = matchedSets.length ? Math.max(...matchedSets.map(s => s.e1RM)) : 0;
+        let declaredBest = 0;
+        for (const row of allOneRMs) {
+          if (std.pattern.test(row.exerciseName || '')) {
+            const w = row.e1RM || row.weight || 0;
+            if (w > declaredBest) declaredBest = w;
+          }
+        }
+        const baseline = declaredBest || (matchedSets.length ? Math.min(...matchedSets.map(s => s.e1RM)) : 0);
+        const record = Math.max(setsBestE1RM, declaredBest);
+        const byWeek = {};
+        for (const s of matchedSets) {
+          if (!byWeek[s.week] || s.e1RM > byWeek[s.week]) byWeek[s.week] = s.e1RM;
+        }
+        const weeks = Object.keys(byWeek).map(Number).sort((a, b) => a - b);
+        const history = weeks.slice(-5).map(w => byWeek[w]);
+        setStats({ baseline, record, history });
+      });
+      return () => { alive = false; };
+    }, [liftKey, refreshKey]);
+    return stats;
+  };
+
+  const useAthxStanding = (liftKey, bodyweight, refreshKey) => {
+    const stats = useLiftStats(liftKey, refreshKey);
+    if (!stats) return null;
+    const stdRow = SEED_ATHX_STANDARDS.find(s => s.lift === liftKey);
+    if (!stdRow) return null;
+    const current = stats.record;
+    const targetRatio = stdRow.targetRatio;
+    const target = bodyweight ? Math.round(bodyweight * targetRatio * 10) / 10 : null;
+    const ratio = (bodyweight && current) ? Math.round((current / bodyweight) * 100) / 100 : null;
+    return { current, target, ratio, targetRatio };
+  };
+
   /* ==========================================================
      Contextes globaux
      ========================================================== */
@@ -1833,9 +1876,9 @@
 
   // E1RMCurve — courbe lissée 20 semaines pour /progression
   const E1RMCurve = ({ liftKey, width = 328, height = 200 }) => {
-    const lift = SEED_LIFTS.find(l => l.key === liftKey);
-    if (!lift) return null;
-    const { baseline, record, history } = lift;
+    const stats = useLiftStats(liftKey);
+    if (!stats || !stats.history.length) return null;
+    const { baseline, record, history } = stats;
     const totalWeeks = 20;
     const padL = 36, padR = 16, padT = 24, padB = 32;
     const chartW = width - padL - padR;
@@ -5843,14 +5886,21 @@
 
     // Progression opportunities — lifts present this week that have ATHX targets
     const weekExoNames = trainingDays.flatMap(d => d.exos.map(ex => ex.exerciseName));
+    const liveStandards = useStandardsDisplay(0);
+    const [bwSemaine, setBwSemaine] = useState(0);
+    useEffect(() => { db.prefs.get('bodyweight').then(r => setBwSemaine(r?.value || 0)); }, []);
     const progressionOpps = SEED_ATHX_STANDARDS.map(std => {
       const athx = ATHX_STANDARDS.find(a => a.id === std.lift);
       if (!athx) return null;
       const hasLift = weekExoNames.some(n => athx.pattern.test(n));
       if (!hasLift) return null;
-      const gap = std.target - std.current;
-      const weekTarget = Math.min(2.5, gap);
-      return { ...std, gap, weekTarget, liftName: athx.name };
+      const live = liveStandards ? liveStandards.find(s => s.id === std.lift) : null;
+      const current = live ? live.bestE1RM : 0;
+      const target = bwSemaine ? Math.round(bwSemaine * std.targetRatio * 10) / 10 : 0;
+      const ratio = bwSemaine && current ? current / bwSemaine : 0;
+      const gap = target - current;
+      const weekTarget = Math.min(2.5, Math.max(0, gap));
+      return { ...std, current, target, ratio, gap, weekTarget, liftName: athx.name };
     }).filter(Boolean);
 
     const totalVol = weekStats.volume;
@@ -5960,7 +6010,7 @@
             <div className="ody-tablet" style={{ padding: 'var(--sp-4)', marginBottom: 'var(--sp-4)' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>
                 {progressionOpps.map(opp => {
-                  const pct = Math.min(1, opp.current / opp.target);
+                  const pct = opp.target > 0 ? Math.min(1, opp.current / opp.target) : 0;
                   const isClose = pct >= 0.9;
                   return (
                     <div key={opp.lift}>
@@ -5970,7 +6020,7 @@
                           fontSize: 11, fontWeight: 700,
                           color: isClose ? 'var(--accent-olympus)' : 'var(--accent-laurel)',
                         }}>
-                          {opp.current} → {opp.target}kg
+                          {opp.current ? Math.round(opp.current) : '—'} → {opp.target ? Math.round(opp.target) : '—'}kg
                         </span>
                       </div>
                       <div style={{ height: 4, background: 'var(--bg-surface)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
@@ -5981,8 +6031,8 @@
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
                         {isClose
-                          ? `A ${opp.gap}kg du standard ATHX — vise +${opp.weekTarget}kg`
-                          : `Vise +${opp.weekTarget}kg · ratio ${opp.ratio.toFixed(2)}x → ${opp.targetRatio.toFixed(1)}x`
+                          ? `A ${Math.round(opp.gap)}kg du standard ATHX — vise +${opp.weekTarget}kg`
+                          : `Vise +${opp.weekTarget}kg · ratio ${opp.ratio ? opp.ratio.toFixed(2) : '—'}x → ${opp.targetRatio.toFixed(1)}x`
                         }
                       </div>
                     </div>
@@ -6668,15 +6718,65 @@
     return null;
   }
 
+  const AthxSteleColumn = ({ liftKey, bodyweight }) => {
+    const standing = useAthxStanding(liftKey, bodyweight);
+    const liftRef = SEED_LIFTS.find(l => l.key === liftKey);
+    const ratio = standing?.ratio || 0;
+    const targetRatio = standing?.targetRatio || 1;
+    const current = standing?.current || 0;
+    const pct = Math.min(1, ratio / targetRatio);
+    const reached = pct >= 1;
+    return (
+      <div style={{ flex: 1, textAlign: 'center', maxWidth: 60 }}>
+        <div style={{
+          fontSize: 9, fontFamily: 'var(--font-mono)', fontWeight: 700,
+          color: 'var(--accent-olympus)', marginBottom: 4,
+        }}>×{targetRatio}</div>
+        <div style={{
+          height: 120, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--r-sm)', position: 'relative', overflow: 'hidden',
+        }}>
+          <div style={{
+            position: 'absolute', top: 0, left: 0, right: 0,
+            height: 2, background: 'var(--accent-olympus)',
+          }} />
+          <div style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0,
+            height: `${pct * 100}%`,
+            background: reached ? 'var(--accent-olympus)' : 'var(--accent-laurel)',
+            opacity: 0.3,
+          }} />
+          <div style={{
+            position: 'absolute', bottom: `${pct * 100}%`, left: 0, right: 0,
+            transform: 'translateY(50%)',
+            textAlign: 'center', fontFamily: 'var(--font-mono)',
+            fontSize: 11, fontWeight: 700, color: 'var(--text-primary)',
+          }}>×{ratio ? ratio.toFixed(1) : '—'}</div>
+        </div>
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
+            {liftRef ? liftRef.name.split(' ')[0] : liftKey}
+          </div>
+          <div className="ody-tactical" style={{ fontSize: 11, marginTop: 2 }}>
+            {current ? `${current}kg` : '—'}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const HerosPage = () => {
     const [refresh, setRefresh] = useState(0);
     const heroStats = useHeroStats(refresh);
     const [openAttr, setOpenAttr] = useState(null);
     const [activeLift, setActiveLift] = useState('squat');
     useEffect(() => { setRefresh(r => r + 1); }, []);
-    const progLift = SEED_LIFTS.find(l => l.key === activeLift);
-    const progLastE1rm = progLift ? progLift.history[progLift.history.length - 1] : 0;
-    const progDelta = progLift ? progLastE1rm - progLift.baseline : 0;
+    const progLiftRef = SEED_LIFTS.find(l => l.key === activeLift);
+    const progLiftStats = useLiftStats(activeLift, refresh);
+    const progLastE1rm = progLiftStats ? (progLiftStats.history.length ? progLiftStats.history[progLiftStats.history.length - 1] : progLiftStats.record) : 0;
+    const progDelta = progLiftStats ? progLastE1rm - progLiftStats.baseline : 0;
+    const [bodyweight, setBodyweight] = useState(0);
+    useEffect(() => { db.prefs.get('bodyweight').then(r => setBodyweight(r?.value || 0)); }, []);
 
     // Use live data if available, fallback to seed
     const currentVals = ATTR_KEYS.map(k => SEED_ATTRIBUTES.current[k]);
@@ -6799,54 +6899,9 @@
             STÈLE ATHX · STANDARDS
           </Inscription>
           <div style={{ display: 'flex', gap: 'var(--sp-2)', justifyContent: 'center' }}>
-            {SEED_ATHX_STANDARDS.map(std => {
-              const lift = SEED_LIFTS.find(l => l.key === std.lift);
-              const pct = Math.min(1, std.ratio / std.targetRatio);
-              const reached = pct >= 1;
-              return (
-                <div key={std.lift} style={{ flex: 1, textAlign: 'center', maxWidth: 60 }}>
-                  {/* Target ratio label */}
-                  <div style={{
-                    fontSize: 9, fontFamily: 'var(--font-mono)', fontWeight: 700,
-                    color: 'var(--accent-olympus)', marginBottom: 4,
-                  }}>×{std.targetRatio}</div>
-                  {/* Stele column */}
-                  <div style={{
-                    height: 120, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
-                    borderRadius: 'var(--r-sm)', position: 'relative', overflow: 'hidden',
-                  }}>
-                    {/* Olympus threshold line */}
-                    <div style={{
-                      position: 'absolute', top: 0, left: 0, right: 0,
-                      height: 2, background: 'var(--accent-olympus)',
-                    }} />
-                    {/* Fill */}
-                    <div style={{
-                      position: 'absolute', bottom: 0, left: 0, right: 0,
-                      height: `${pct * 100}%`,
-                      background: reached ? 'var(--accent-olympus)' : 'var(--accent-laurel)',
-                      opacity: 0.3,
-                    }} />
-                    {/* Ratio inside */}
-                    <div style={{
-                      position: 'absolute', bottom: `${pct * 100}%`, left: 0, right: 0,
-                      transform: 'translateY(50%)',
-                      textAlign: 'center', fontFamily: 'var(--font-mono)',
-                      fontSize: 11, fontWeight: 700, color: 'var(--text-primary)',
-                    }}>×{std.ratio.toFixed(1)}</div>
-                  </div>
-                  {/* Label below */}
-                  <div style={{ marginTop: 6 }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
-                      {lift ? lift.name.split(' ')[0] : std.lift}
-                    </div>
-                    <div className="ody-tactical" style={{ fontSize: 11, marginTop: 2 }}>
-                      {std.current}kg
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+            {SEED_ATHX_STANDARDS.map(std => (
+              <AthxSteleColumn key={std.lift} liftKey={std.lift} bodyweight={bodyweight} />
+            ))}
           </div>
         </div>
 
@@ -6886,14 +6941,14 @@
           </div>
 
           {/* E1RM Totem Card */}
-          {progLift && (
+          {progLiftRef && progLiftStats && (
             <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)', marginBottom: 'var(--sp-4)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--sp-3)' }}>
                 <div>
-                  <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>{progLift.name}</Inscription>
+                  <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>{progLiftRef.name}</Inscription>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
-                    <Totem size={40} color="var(--accent-laurel)">{progLastE1rm}</Totem>
-                    <span className="ody-tactical" style={{ fontSize: 13 }}>kg · S5</span>
+                    <Totem size={40} color="var(--accent-laurel)">{progLastE1rm || '—'}</Totem>
+                    <span className="ody-tactical" style={{ fontSize: 13 }}>kg</span>
                   </div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
@@ -6912,15 +6967,15 @@
           )}
 
           {/* Repaires Card */}
-          {progLift && (
+          {progLiftRef && progLiftStats && (
             <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)' }}>
               <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block' }}>
-                REPÈRES · {progLift.name.toUpperCase()}
+                REPÈRES · {progLiftRef.name.toUpperCase()}
               </Inscription>
               {[
-                { label: 'Record absolu', value: progLift.record, color: 'var(--accent-olympus)', hint: 'horizon · 1RM théorique' },
-                { label: 'e1RM actuel', value: progLastE1rm, color: 'var(--accent-laurel)', hint: 'sem 5' },
-                { label: 'Baseline', value: progLift.baseline, color: 'var(--text-tertiary)', hint: 'entrée programme' },
+                { label: 'Record absolu', value: progLiftStats.record, color: 'var(--accent-olympus)', hint: 'max e1RM' },
+                { label: 'e1RM actuel', value: progLastE1rm, color: 'var(--accent-laurel)', hint: 'dernier PR' },
+                { label: 'Baseline', value: progLiftStats.baseline, color: 'var(--text-tertiary)', hint: '1RM déclaré' },
               ].map((rep, i) => (
                 <div key={i} style={{
                   display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
@@ -6934,7 +6989,7 @@
                     <div style={{ fontSize: 12, fontWeight: 700, color: rep.color }}>{rep.label}</div>
                     <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{rep.hint}</div>
                   </div>
-                  <Totem size={24} color={rep.color}>{rep.value}</Totem>
+                  <Totem size={24} color={rep.color}>{rep.value || '—'}</Totem>
                   <span className="ody-tactical" style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>kg</span>
                 </div>
               ))}
@@ -6952,9 +7007,10 @@
      ========================================================== */
   const ProgressionPage = () => {
     const [activeLift, setActiveLift] = useState('squat');
-    const lift = SEED_LIFTS.find(l => l.key === activeLift);
-    const lastE1rm = lift ? lift.history[lift.history.length - 1] : 0;
-    const deltaBaseline = lift ? lastE1rm - lift.baseline : 0;
+    const liftRef = SEED_LIFTS.find(l => l.key === activeLift);
+    const liftStats = useLiftStats(activeLift);
+    const lastE1rm = liftStats ? (liftStats.history.length ? liftStats.history[liftStats.history.length - 1] : liftStats.record) : 0;
+    const deltaBaseline = liftStats ? lastE1rm - liftStats.baseline : 0;
 
     return (
       <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
@@ -6994,14 +7050,14 @@
         </div>
 
         {/* E1RM Totem Card */}
-        {lift && (
+        {liftRef && liftStats && (
           <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)', marginBottom: 'var(--sp-4)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--sp-3)' }}>
               <div>
-                <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>{lift.name}</Inscription>
+                <Inscription size="xs" style={{ color: 'var(--text-tertiary)' }}>{liftRef.name}</Inscription>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
-                  <Totem size={40} color="var(--accent-laurel)">{lastE1rm}</Totem>
-                  <span className="ody-tactical" style={{ fontSize: 13 }}>kg · S5</span>
+                  <Totem size={40} color="var(--accent-laurel)">{lastE1rm || '—'}</Totem>
+                  <span className="ody-tactical" style={{ fontSize: 13 }}>kg</span>
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
@@ -7020,15 +7076,15 @@
         )}
 
         {/* Repaires Card */}
-        {lift && (
+        {liftRef && liftStats && (
           <div className="ody-tablet" style={{ padding: 'var(--sp-4) var(--sp-5)' }}>
             <Inscription size="xs" style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--sp-3)', display: 'block' }}>
-              REPÈRES · {lift.name.toUpperCase()}
+              REPÈRES · {liftRef.name.toUpperCase()}
             </Inscription>
             {[
-              { label: 'Record absolu', value: lift.record, color: 'var(--accent-olympus)', hint: 'Plus haut e1RM atteint' },
-              { label: 'e1RM actuel', value: lastE1rm, color: 'var(--accent-laurel)', hint: 'Dernière valeur S5' },
-              { label: 'Baseline', value: lift.baseline, color: 'var(--text-tertiary)', hint: 'Point de départ S1' },
+              { label: 'Record absolu', value: liftStats.record, color: 'var(--accent-olympus)', hint: 'max e1RM' },
+              { label: 'e1RM actuel', value: lastE1rm, color: 'var(--accent-laurel)', hint: 'dernier PR' },
+              { label: 'Baseline', value: liftStats.baseline, color: 'var(--text-tertiary)', hint: '1RM déclaré' },
             ].map((rep, i) => (
               <div key={i} style={{
                 display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
@@ -7044,7 +7100,7 @@
                   <div style={{ fontSize: 12, fontWeight: 700, color: rep.color }}>{rep.label}</div>
                   <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{rep.hint}</div>
                 </div>
-                <Totem size={24} color={rep.color}>{rep.value}</Totem>
+                <Totem size={24} color={rep.color}>{rep.value || '—'}</Totem>
                 <span className="ody-tactical" style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>kg</span>
               </div>
             ))}
