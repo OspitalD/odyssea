@@ -558,12 +558,6 @@
 
   const inferFormat = (prescription) => (FORMAT_META[detectFormat(prescription)] || FORMAT_META.traditional).label;
 
-  const SEED_KPI = [
-    { label: 'Volume Load', value: '12.4k', unit: 'kg', delta: '+8%', ref: 'vs S4',     accent: 'var(--accent-laurel)' },
-    { label: 'Sessions',    value: '2/4',   unit: '',   delta: null,   ref: 'cette sem', accent: null },
-    { label: 'Streak',      value: '14',    unit: 'j',  delta: 'Stratege', ref: 'rang',  accent: 'var(--accent-olympus)' },
-    { label: 'ATHX',        value: '136',   unit: 'j',  delta: null,   ref: 'restants',  accent: 'var(--accent-olympus)' },
-  ];
 
   const SEED_ATHX_STANDARDS = [
     { lift: 'squat',    current: 152, target: 164, ratio: 1.85, targetRatio: 2.0 },
@@ -1407,6 +1401,39 @@
       return () => { alive = false; };
     }, [refreshKey]);
     return streak;
+  };
+
+  const useWeekKPIs = (week, streak) => {
+    const [kpis, setKpis] = useState(null);
+    useEffect(() => {
+      let alive = true;
+      Promise.all([
+        db.sets.where('week').equals(week).toArray(),
+        week > 1 ? db.sets.where('week').equals(week - 1).toArray() : Promise.resolve([]),
+      ]).then(([cur, prev]) => {
+        if (!alive) return;
+        const volCur = volumeLoad(cur);
+        const volPrev = volumeLoad(prev);
+        const fmtVol = volCur >= 10000 ? (volCur / 1000).toFixed(1) + 'k' : String(volCur);
+        const delta = volPrev > 0
+          ? ((volCur - volPrev) / volPrev * 100 >= 0 ? '+' : '') + Math.round((volCur - volPrev) / volPrev * 100) + '%'
+          : null;
+        const deltaRef = volPrev > 0 ? 'vs S' + (week - 1) : null;
+        const sessionDays = new Set(cur.map(s => s.sessionDay));
+        const strengthCount = ['Monday','Wednesday','Friday','Saturday'].filter(d => sessionDays.has(d)).length;
+        const rank = streak ? getRank(streak.currentStreak) : STREAK_RANKS[0];
+        const streakVal = streak ? streak.currentStreak : 0;
+        const athxDays = daysUntil(ATHX_DATE);
+        setKpis([
+          { label: 'Volume Load', value: fmtVol, unit: 'kg', delta, ref: deltaRef, accent: 'var(--accent-laurel)' },
+          { label: 'Sessions', value: strengthCount + '/4', unit: '', delta: null, ref: 'cette sem', accent: null },
+          { label: 'Streak', value: String(streakVal), unit: 'j', delta: rank.name, ref: 'rang', accent: 'var(--accent-olympus)' },
+          { label: 'ATHX', value: String(athxDays), unit: 'j', delta: null, ref: 'restants', accent: 'var(--accent-olympus)' },
+        ]);
+      });
+      return () => { alive = false; };
+    }, [week, streak]);
+    return kpis;
   };
 
   // Hook : meilleur set (par e1RM) de la semaine précédente pour un exo
@@ -5103,6 +5130,7 @@
 
     const [streakTick, setStreakTick] = useState(0);
     const streak = useStreak(streakTick);
+    const liveKPIs = useWeekKPIs(week, streak);
 
     const [expandedSlot, setExpandedSlot] = useState(null);
     const [endPhrase, setEndPhrase] = useState(null);
@@ -5551,7 +5579,7 @@
 
           {/* KPI 2×2 grid */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)' }}>
-            {SEED_KPI.map(kpi => (
+            {(liveKPIs || []).map(kpi => (
               <KPITile key={kpi.label} label={kpi.label} value={kpi.value} unit={kpi.unit} delta={kpi.delta} caption={kpi.ref} accent={kpi.accent} />
             ))}
           </div>
