@@ -333,7 +333,7 @@
     HEROS:       '/heros',
     PROGRESSION: '/progression',
     CARTE:       '/carte',
-    STATS:       '/stats',     // legacy — redirige vers /heros (gardé pour bookmarks)
+    STATS:       '/stats',
     REGLAGES:   '/reglages',
   };
   const DEFAULT_ROUTE = ROUTES.AUJOURDHUI;
@@ -2414,6 +2414,7 @@
   const NAV_ITEMS = [
     { id: 'aujourdhui',  to: ROUTES.AUJOURDHUI,  label: "Aujourd'hui" },
     { id: 'semaine',     to: ROUTES.SEMAINE,      label: 'Semaine' },
+    { id: 'stats',       to: ROUTES.STATS,        label: 'Stats' },
     { id: 'heros',       to: ROUTES.HEROS,        label: 'Héros' },
     { id: 'reglages',    to: ROUTES.REGLAGES,     label: 'Réglages' },
   ];
@@ -7230,6 +7231,1169 @@
     );
   };
 
+  /* ==========================================================
+     STATS DASHBOARD — P0-polish/D
+     Bloomberg Terminal de l'athlète : 7 sections analytiques
+     ========================================================== */
+
+  const LIFT_COLORS = {
+    squat:    'var(--accent-laurel)',
+    deadlift: 'var(--accent-olympus)',
+    bench:    'var(--accent-royal)',
+    ohp:      'var(--text-secondary)',
+    row:      '#7AAEB7',
+  };
+  const LIFT_SHORT = { squat: 'Squat', deadlift: 'Deadlift', bench: 'Bench', ohp: 'OHP', row: 'Row' };
+
+  const FORMAT_COLORS = {
+    density:   'rgba(62, 207, 160, 0.7)',
+    emom:      'rgba(232, 160, 32, 0.7)',
+    softAmrap: 'rgba(185, 144, 224, 0.7)',
+    aerobic:   'rgba(122, 174, 183, 0.7)',
+    anaerobic: 'rgba(224, 90, 74, 0.5)',
+    iso:       'rgba(122, 124, 122, 0.5)',
+  };
+
+  const STRENGTH_DAYS = ['Monday', 'Wednesday', 'Friday', 'Saturday'];
+  const STRENGTH_DAY_FR = { Monday: 'Lundi', Wednesday: 'Mercredi', Friday: 'Vendredi', Saturday: 'Samedi' };
+  const HEATMAP_ROWS = ['Monday', 'Wednesday', 'Friday', 'Saturday'];
+  const HEATMAP_ROW_LABELS = ['LUN', 'MER', 'VEN', 'SAM'];
+
+  function useDashboardData() {
+    const [data, setData] = useState(null);
+    useEffect(() => {
+      let alive = true;
+      (async () => {
+        const [allSets, allPrs, allOneRMs, bwPref, streakRow, allProgramme, allAttrs] = await Promise.all([
+          db.sets.toArray(),
+          db.prs.toArray(),
+          db.oneRMs.toArray(),
+          db.prefs.get('bodyweight'),
+          getStreak(),
+          db.programme.toArray(),
+          db.attributes.toArray(),
+        ]);
+        if (!alive) return;
+        const bodyweight = bwPref?.value || 0;
+        const currentWeek = getCurrentWeek();
+        const currentBlock = getCurrentBlock(currentWeek);
+
+        // ── Heatmap data ──
+        const sessionVolumes = {};
+        for (const s of allSets) {
+          const key = `${s.week}_${s.sessionDay}`;
+          sessionVolumes[key] = (sessionVolumes[key] || 0) + (s.weight || 0) * (s.reps || 0);
+        }
+        const allVolumes = Object.values(sessionVolumes).filter(v => v > 0);
+        const medianVol = allVolumes.length ? allVolumes.sort((a, b) => a - b)[Math.floor(allVolumes.length / 2)] : 0;
+
+        const heatmapCells = [];
+        for (let w = 1; w <= 20; w++) {
+          for (const day of HEATMAP_ROWS) {
+            const key = `${w}_${day}`;
+            const vol = sessionVolumes[key] || 0;
+            let intensity = 0;
+            if (vol > 0) {
+              if (vol < medianVol * 0.7) intensity = 1;
+              else if (vol <= medianVol * 1.3) intensity = 2;
+              else intensity = 3;
+            }
+            const daySets = allSets.filter(s => s.week === w && s.sessionDay === day);
+            const dayPrs = allPrs.filter(p => p.week === w && p.sessionDay === day);
+            heatmapCells.push({ week: w, day, vol, intensity, sets: daySets, prs: dayPrs });
+          }
+        }
+
+        // ── Block completion ring ──
+        const blockWeeks = currentBlock.weeks;
+        const blockSessions = new Set();
+        for (const s of allSets) {
+          if (s.week >= blockWeeks[0] && s.week <= blockWeeks[1] && STRENGTH_DAYS.includes(s.sessionDay)) {
+            blockSessions.add(`${s.week}_${s.sessionDay}`);
+          }
+        }
+        const blockSessionCount = blockSessions.size;
+        const blockTotalSessions = (blockWeeks[1] - blockWeeks[0] + 1) * 4;
+        const blockCompletion = blockTotalSessions > 0 ? blockSessionCount / blockTotalSessions : 0;
+
+        // ── Counters ──
+        const blockVolume = allSets
+          .filter(s => s.week >= blockWeeks[0] && s.week <= blockWeeks[1])
+          .reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0);
+        const blockPRCount = allPrs.filter(p => p.block === currentBlock.id).length;
+
+        // ── Weekly e1RMs per lift ──
+        const weeklyE1RMs = computeWeeklyE1RMs(allSets);
+
+        // ── Declared 1RMs (baselines) ──
+        const declaredByLift = {};
+        for (const std of ATHX_STANDARDS) {
+          const matches = allOneRMs.filter(o => std.pattern.test(o.exerciseName || ''));
+          declaredByLift[std.id] = matches.length ? Math.max(...matches.map(o => o.weight || o.e1RM || 0)) : 0;
+        }
+
+        // ── ATHX targets ──
+        const athxTargets = {};
+        for (const std of ATHX_STANDARDS) {
+          athxTargets[std.id] = bodyweight > 0 ? Math.round(bodyweight * std.targetBW * 10) / 10 : 0;
+        }
+
+        // ── Top 5 PRs by delta ──
+        const prsWithDelta = allPrs.map(p => {
+          const declared = declaredByLift[p.liftKey] || 0;
+          return { ...p, delta: (p.e1RM || 0) - declared };
+        }).sort((a, b) => b.delta - a.delta);
+        const topPRs = prsWithDelta.slice(0, 5);
+
+        // ── PR timeline ──
+        const prsByWeek = {};
+        for (const p of allPrs) {
+          (prsByWeek[p.week] ||= []).push(p);
+        }
+
+        // ── Weekly volume ──
+        const weeklyVolume = [];
+        for (let w = 1; w <= 20; w++) {
+          const vol = allSets.filter(s => s.week === w).reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0);
+          weeklyVolume.push({ week: w, volume: vol });
+        }
+        const volumeValues = weeklyVolume.map(w => w.volume).filter(v => v > 0);
+        const volumeMedian = volumeValues.length ? volumeValues.sort((a, b) => a - b)[Math.floor(volumeValues.length / 2)] : 0;
+
+        // ── Attributes snapshot (current only, no history) ──
+        const currentAttrs = allAttrs.find(a => a.type === 'current');
+        const baselineAttrs = allAttrs.find(a => a.type === 'baseline');
+
+        // ── Format duration per week ──
+        const formatMinByWeek = [];
+        for (let w = 1; w <= 20; w++) {
+          const weekSets = allSets.filter(s => s.week === w);
+          const byFormat = {};
+          for (const fmt of Object.keys(FORMAT_COLORS)) {
+            byFormat[fmt] = weekSets.filter(s => s.format === fmt).reduce((sum, s) => sum + (s.durationMinutes || 0), 0);
+          }
+          formatMinByWeek.push({ week: w, ...byFormat });
+        }
+
+        // ── Recovery delta ──
+        const curWeekVol = allSets.filter(s => s.week === currentWeek).reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0);
+        const prevWeekVol = currentWeek > 1 ? allSets.filter(s => s.week === currentWeek - 1).reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0) : 0;
+        const recoveryDelta = prevWeekVol > 0 ? ((curWeekVol - prevWeekVol) / prevWeekVol) * 100 : null;
+
+        // ── Mètis weekly ──
+        const programmeBySlot = {};
+        for (const p of allProgramme) {
+          programmeBySlot[`${p.week}_${p.sessionDay}_${p.exerciseSlot}`] = p;
+        }
+        const metisWeekly = [];
+        for (let w = 1; w <= 20; w++) {
+          const weekSets = allSets.filter(s => s.week === w);
+          const eligible = weekSets.filter(s => {
+            if (s.rir === null || s.rir === undefined) return false;
+            const key = `${s.week}_${s.sessionDay}_${s.exerciseSlot}`;
+            return getPrescribedRir(programmeBySlot[key]) !== null;
+          });
+          const inWindow = eligible.filter(s => {
+            const key = `${s.week}_${s.sessionDay}_${s.exerciseSlot}`;
+            const prescribed = getPrescribedRir(programmeBySlot[key]);
+            return Math.abs(s.rir - prescribed) <= 1;
+          });
+          const pct = eligible.length > 0 ? (inWindow.length / eligible.length) * 100 : null;
+          metisWeekly.push({ week: w, pct, eligible: eligible.length });
+        }
+
+        // ── RPE weekly ──
+        const rpeWeekly = [];
+        for (let w = 1; w <= 20; w++) {
+          const weekSets = allSets.filter(s => s.week === w && s.rir !== null && s.rir !== undefined);
+          if (weekSets.length > 0) {
+            const avgRpe = weekSets.reduce((sum, s) => sum + (10 - s.rir), 0) / weekSets.length;
+            rpeWeekly.push({ week: w, rpe: avgRpe });
+          }
+        }
+
+        // ── Missed sessions (block) ──
+        const plannedByWeekDay = new Set();
+        for (const p of allProgramme) {
+          if (p.week >= blockWeeks[0] && p.week <= blockWeeks[1]) {
+            plannedByWeekDay.add(`${p.week}_${p.sessionDay}`);
+          }
+        }
+        const doneByWeekDay = new Set();
+        for (const s of allSets) {
+          if (s.week >= blockWeeks[0] && s.week <= blockWeeks[1]) {
+            doneByWeekDay.add(`${s.week}_${s.sessionDay}`);
+          }
+        }
+        const missedSessions = [...plannedByWeekDay].filter(k => {
+          const [w] = k.split('_').map(Number);
+          return w < currentWeek && !doneByWeekDay.has(k);
+        });
+
+        // ── Volume by day of week ──
+        const volByDay = {};
+        const countByDay = {};
+        for (const day of STRENGTH_DAYS) {
+          volByDay[day] = 0;
+          countByDay[day] = 0;
+        }
+        for (const s of allSets.filter(s => s.week >= blockWeeks[0] && s.week <= blockWeeks[1] && STRENGTH_DAYS.includes(s.sessionDay))) {
+          volByDay[s.sessionDay] += (s.weight || 0) * (s.reps || 0);
+          const key = `${s.week}_${s.sessionDay}`;
+          if (!countByDay[`seen_${key}`]) {
+            countByDay[`seen_${key}`] = true;
+            countByDay[s.sessionDay]++;
+          }
+        }
+        const avgVolByDay = STRENGTH_DAYS.map(d => ({
+          day: d,
+          dayFr: STRENGTH_DAY_FR[d],
+          avgVol: countByDay[d] > 0 ? Math.round(volByDay[d] / countByDay[d]) : 0,
+        })).sort((a, b) => b.avgVol - a.avgVol);
+
+        // ── PR by day ──
+        const prByDay = STRENGTH_DAYS.map(d => {
+          const dayPrs = allPrs.filter(p => p.sessionDay === d && p.block === currentBlock.id);
+          const best = dayPrs.length ? dayPrs.reduce((m, p) => p.e1RM > m.e1RM ? p : m, dayPrs[0]) : null;
+          return { day: d, dayFr: STRENGTH_DAY_FR[d], count: dayPrs.length, best };
+        });
+
+        // ── ETA projection (linear regression on last 4 weeks of e1RM) ──
+        const projections = {};
+        for (const std of ATHX_STANDARDS) {
+          const pts = weeklyE1RMs[std.id] || [];
+          const target = athxTargets[std.id];
+          const current = pts.length ? pts[pts.length - 1].e1RM : declaredByLift[std.id];
+          if (pts.length >= 4 && target > 0 && current < target) {
+            const last4 = pts.slice(-4);
+            const n = last4.length;
+            const sumX = last4.reduce((s, p) => s + p.week, 0);
+            const sumY = last4.reduce((s, p) => s + p.e1RM, 0);
+            const sumXY = last4.reduce((s, p) => s + p.week * p.e1RM, 0);
+            const sumX2 = last4.reduce((s, p) => s + p.week * p.week, 0);
+            const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+            if (slope > 0) {
+              const weeksToTarget = Math.ceil((target - current) / slope);
+              projections[std.id] = { eta: weeksToTarget, current, target, slope };
+            } else {
+              projections[std.id] = { eta: null, current, target };
+            }
+          } else {
+            projections[std.id] = { eta: null, current: current || 0, target };
+          }
+        }
+
+        // ── Goals tracker ──
+        const goals = ATHX_STANDARDS.map(std => {
+          const pts = weeklyE1RMs[std.id] || [];
+          const current = pts.length ? pts[pts.length - 1].e1RM : declaredByLift[std.id];
+          const target = athxTargets[std.id];
+          const ratioBW = bodyweight > 0 && current > 0 ? current / bodyweight : 0;
+          const progress = target > 0 ? current / target : 0;
+          const status = progress >= 0.95 ? 'green' : progress >= 0.80 ? 'yellow' : 'red';
+          return { ...std, current, target, ratioBW, progress, status, projection: projections[std.id] };
+        });
+
+        // ── Insights ──
+        const insights = [];
+        // 1. Jour fort
+        const avgVols = avgVolByDay.filter(d => d.avgVol > 0);
+        if (avgVols.length >= 2) {
+          const totalAvg = avgVols.reduce((s, d) => s + d.avgVol, 0) / avgVols.length;
+          const best = avgVols[0];
+          if (best.avgVol > totalAvg * 1.15) {
+            const pct = Math.round(((best.avgVol - totalAvg) / totalAvg) * 100);
+            insights.push(`Ton ${best.dayFr} est ton jour le plus performant : +${pct}% volume vs ta moyenne`);
+          }
+        }
+        // 2. Streak de PR
+        const recentPrs = allPrs.filter(p => {
+          const d = new Date(p.validatedAt);
+          return (Date.now() - d.getTime()) < 7 * 86400000;
+        });
+        if (recentPrs.length >= 3) {
+          insights.push(`${recentPrs.length} PR battus ces 7 derniers jours`);
+        }
+        // 3. Mètis en baisse
+        const metisWithData = metisWeekly.filter(m => m.pct !== null);
+        if (metisWithData.length >= 2) {
+          const last2 = metisWithData.slice(-2);
+          if (last2[0].pct - last2[1].pct > 10) {
+            insights.push(`Ton Mètis baisse depuis 2 semaines (de ${Math.round(last2[0].pct)}% à ${Math.round(last2[1].pct)}%) — attention aux RIR prescrits`);
+          }
+        }
+        // 4. Target ATHX proche
+        for (const g of goals) {
+          if (g.progress >= 0.95 && g.progress < 1 && g.projection?.eta) {
+            insights.push(`Tu es à ${Math.round(g.progress * 100)}% du target ATHX ${g.name}, ETA = ${g.projection.eta} semaines`);
+          }
+        }
+        // 5. Recovery alerte
+        if (recoveryDelta !== null && recoveryDelta > 30) {
+          insights.push(`Volume +${Math.round(recoveryDelta)}% cette semaine — surveille la fatigue`);
+        }
+        // 6. Adhérence forte
+        const last14DaysSessions = allSets.filter(s => {
+          const d = new Date(s.completedAt);
+          return (Date.now() - d.getTime()) < 14 * 86400000 && STRENGTH_DAYS.includes(s.sessionDay);
+        });
+        const last14Days = new Set(last14DaysSessions.map(s => `${s.week}_${s.sessionDay}`));
+        if (last14Days.size >= 8) {
+          insights.push("14 jours d'adhérence parfaite — Áreté en hausse");
+        }
+        // 7. PR loin
+        if (allPrs.length > 0) {
+          const lastPrDate = new Date(Math.max(...allPrs.map(p => new Date(p.validatedAt).getTime())));
+          const daysSincePr = Math.floor((Date.now() - lastPrDate.getTime()) / 86400000);
+          if (daysSincePr >= 14) {
+            insights.push(`Aucun PR depuis ${daysSincePr} jours — l'appel de Pónos résonne`);
+          }
+        }
+        // 8. Squat overload
+        const totalVol = allSets.filter(s => s.week >= blockWeeks[0] && s.week <= blockWeeks[1]).reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0);
+        if (totalVol > 0) {
+          const squatStd = ATHX_STANDARDS.find(s => s.id === 'squat');
+          const squatVol = allSets.filter(s => s.week >= blockWeeks[0] && s.week <= blockWeeks[1] && squatStd.pattern.test(s.exerciseName || '')).reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0);
+          const pct = Math.round((squatVol / totalVol) * 100);
+          if (pct > 40) {
+            insights.push(`Concentration Squat ${pct}% du volume — diversifie les patterns`);
+          }
+        }
+
+        setData({
+          heatmapCells, blockCompletion, blockSessionCount, blockTotalSessions,
+          blockVolume, blockPRCount, currentBlock, currentWeek,
+          streak: streakRow, weeklyE1RMs, declaredByLift, athxTargets,
+          topPRs, allPrs: prsWithDelta, prsByWeek, weeklyVolume, volumeMedian,
+          currentAttrs, baselineAttrs, formatMinByWeek,
+          recoveryDelta, metisWeekly, rpeWeekly, missedSessions,
+          avgVolByDay, prByDay, insights, goals, bodyweight,
+        });
+      })();
+      return () => { alive = false; };
+    }, []);
+    return data;
+  }
+
+  // ── SVG Chart Components ──
+
+  const RingProgress = ({ pct, size = 100, strokeWidth = 6, color, children }) => {
+    const r = (size - strokeWidth) / 2;
+    const circ = 2 * Math.PI * r;
+    const offset = circ * (1 - Math.min(pct, 1));
+    return (
+      <div style={{ position: 'relative', width: size, height: size }}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none"
+            stroke="var(--border-subtle)" strokeWidth={strokeWidth} />
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none"
+            stroke={color} strokeWidth={strokeWidth}
+            strokeDasharray={circ} strokeDashoffset={offset}
+            strokeLinecap="round"
+            transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+        </svg>
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          {children}
+        </div>
+      </div>
+    );
+  };
+
+  const SectionHeader = ({ children }) => (
+    <div style={{
+      fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase',
+      color: 'var(--text-muted)', fontFamily: 'var(--font-sans)',
+      marginBottom: 'var(--sp-3)', marginTop: 'var(--sp-6)',
+    }}>{children}</div>
+  );
+
+  const StatCard = ({ children, style }) => (
+    <div style={{
+      background: 'var(--bg-secondary, var(--bg-surface))',
+      border: '1px solid var(--border-subtle)',
+      borderRadius: 'var(--r-md)',
+      padding: 16,
+      ...style,
+    }}>{children}</div>
+  );
+
+  const StatsPage = () => {
+    const data = useDashboardData();
+    const navigate = useNavigate();
+    const [heatmapModal, setHeatmapModal] = useState(null);
+    const [goalDrill, setGoalDrill] = useState(null);
+    const [liftToggles, setLiftToggles] = useState({ squat: true, deadlift: true, bench: true, ohp: true, row: true });
+    const [showAllPRs, setShowAllPRs] = useState(false);
+
+    if (!data) return (
+      <div style={{ padding: 'var(--sp-5) var(--sp-4)', textAlign: 'center', color: 'var(--text-tertiary)' }}>
+        Chargement…
+      </div>
+    );
+
+    const {
+      heatmapCells, blockCompletion, blockSessionCount, blockTotalSessions,
+      blockVolume, blockPRCount, currentBlock, currentWeek,
+      streak, weeklyE1RMs, declaredByLift, athxTargets,
+      topPRs, allPrs, prsByWeek, weeklyVolume, volumeMedian,
+      currentAttrs, baselineAttrs, formatMinByWeek,
+      recoveryDelta, metisWeekly, rpeWeekly, missedSessions,
+      avgVolByDay, prByDay, insights, goals, bodyweight,
+    } = data;
+
+    const fmtVol = (v) => v >= 10000 ? (v / 1000).toFixed(1) + 'k' : String(Math.round(v));
+    const ringColor = blockCompletion > 0.8 ? 'var(--accent-olympus)' : 'var(--accent-laurel)';
+    const rank = streak ? getRank(streak.currentStreak) : STREAK_RANKS[0];
+
+    // ── E1RM multi-line chart calculations ──
+    const e1rmChartW = 360, e1rmChartH = 200;
+    const e1rmPadL = 40, e1rmPadR = 16, e1rmPadT = 16, e1rmPadB = 28;
+    const e1rmCW = e1rmChartW - e1rmPadL - e1rmPadR;
+    const e1rmCH = e1rmChartH - e1rmPadT - e1rmPadB;
+    const allE1RMVals = [];
+    for (const std of ATHX_STANDARDS) {
+      if (liftToggles[std.id]) {
+        (weeklyE1RMs[std.id] || []).forEach(p => allE1RMVals.push(p.e1RM));
+        if (declaredByLift[std.id]) allE1RMVals.push(declaredByLift[std.id]);
+        if (athxTargets[std.id]) allE1RMVals.push(athxTargets[std.id]);
+      }
+    }
+    const e1rmMin = allE1RMVals.length ? Math.min(...allE1RMVals) - 10 : 0;
+    const e1rmMax = allE1RMVals.length ? Math.max(...allE1RMVals) + 10 : 100;
+    const e1rmX = (w) => e1rmPadL + ((w - 1) / 19) * e1rmCW;
+    const e1rmY = (v) => e1rmPadT + e1rmCH - ((v - e1rmMin) / (e1rmMax - e1rmMin || 1)) * e1rmCH;
+
+    // ── Volume bar chart calculations ──
+    const volChartW = 360, volChartH = 140;
+    const volPadL = 8, volPadR = 8, volPadT = 20, volPadB = 20;
+    const volCW = volChartW - volPadL - volPadR;
+    const volCH = volChartH - volPadT - volPadB;
+    const maxVol = Math.max(...weeklyVolume.map(w => w.volume), 1);
+    const volBarW = volCW / 20 - 2;
+
+    // ── PR timeline bar chart ──
+    const prTimeW = 360, prTimeH = 100;
+    const prTimePadL = 8, prTimePadR = 8, prTimePadT = 8, prTimePadB = 20;
+    const prTimeCW = prTimeW - prTimePadL - prTimePadR;
+    const prTimeCH = prTimeH - prTimePadT - prTimePadB;
+    const allPrE1RMs = allPrs.filter(p => p.e1RM).map(p => p.e1RM);
+    const maxPrE1RM = allPrE1RMs.length ? Math.max(...allPrE1RMs) : 100;
+
+    // ── Recovery color ──
+    let recoveryColor = 'var(--text-secondary)';
+    if (recoveryDelta !== null) {
+      if (recoveryDelta > 30) recoveryColor = 'var(--accent-blood)';
+      else if (recoveryDelta > 15) recoveryColor = 'var(--accent-olympus)';
+      else if (recoveryDelta >= 0) recoveryColor = 'var(--accent-laurel)';
+      else if (recoveryDelta < -15) recoveryColor = 'var(--text-muted)';
+    }
+
+    return (
+      <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
+        {/* Page header */}
+        <div style={{ padding: 'var(--sp-5) 0 var(--sp-2)' }}>
+          <div style={{
+            fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
+            color: 'var(--text-secondary)', letterSpacing: '0.12em', textTransform: 'uppercase',
+          }}>STATS · DASHBOARD</div>
+          <div style={{
+            fontFamily: 'var(--font-greek)', fontStyle: 'italic', fontSize: 15,
+            color: 'var(--text-tertiary)', marginTop: 4,
+          }}>Bloc {currentBlock.id} · {currentBlock.name}</div>
+        </div>
+
+        {/* ═══════ SECTION 1 — VUE D'ENSEMBLE ═══════ */}
+        <SectionHeader>VUE D'ENSEMBLE</SectionHeader>
+
+        {/* 1.1 Heatmap */}
+        <StatCard style={{ padding: 'var(--sp-3)', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          <svg width={Math.max(360, 20 * 18 + 40)} height={130} viewBox={`0 0 ${Math.max(360, 20 * 18 + 40)} 130`} style={{ display: 'block' }}>
+            {/* Block labels */}
+            {BLOCKS.map(b => {
+              const x1 = 36 + (b.weeks[0] - 1) * 18;
+              const x2 = 36 + (b.weeks[1]) * 18 - 2;
+              return (
+                <text key={b.id} x={(x1 + x2) / 2} y={10} textAnchor="middle"
+                  fontSize="8" fontFamily="var(--font-mono)" fill="var(--text-tertiary)" fontWeight="700">
+                  {b.name.toUpperCase().replace('LES ', '').slice(0, 10)}
+                </text>
+              );
+            })}
+            {/* Week labels */}
+            {[1, 5, 10, 15, 20].map(w => (
+              <text key={w} x={36 + (w - 1) * 18 + 7} y={22} textAnchor="middle"
+                fontSize="7" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">
+                W{w}
+              </text>
+            ))}
+            {/* Block separators */}
+            {[6, 12, 16].map(w => (
+              <line key={w} x1={36 + w * 18 - 1} y1={26} x2={36 + w * 18 - 1} y2={118}
+                stroke="var(--border-subtle)" strokeWidth="1" />
+            ))}
+            {/* Day labels */}
+            {HEATMAP_ROW_LABELS.map((label, i) => (
+              <text key={label} x={30} y={38 + i * 22} textAnchor="end" dominantBaseline="middle"
+                fontSize="8" fontFamily="var(--font-mono)" fill="var(--text-tertiary)" fontWeight="700">
+                {label}
+              </text>
+            ))}
+            {/* Cells */}
+            {heatmapCells.map((cell, idx) => {
+              const ri = HEATMAP_ROWS.indexOf(cell.day);
+              const x = 36 + (cell.week - 1) * 18;
+              const y = 28 + ri * 22;
+              const opacities = [0, 0.3, 0.6, 1.0];
+              return (
+                <rect key={idx} x={x} y={y} width={16} height={18} rx={2}
+                  fill={cell.intensity > 0 ? 'var(--accent-laurel)' : 'transparent'}
+                  fillOpacity={opacities[cell.intensity]}
+                  stroke={cell.intensity === 0 ? 'var(--border-subtle)' : 'none'}
+                  strokeWidth={cell.intensity === 0 ? 0.5 : 0}
+                  style={{ cursor: cell.intensity > 0 ? 'pointer' : 'default' }}
+                  onClick={() => cell.intensity > 0 && setHeatmapModal(cell)}
+                />
+              );
+            })}
+          </svg>
+        </StatCard>
+
+        {/* 1.2 Ring + 1.3 Counters */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-3)', marginTop: 'var(--sp-3)' }}>
+          <StatCard style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 'var(--sp-4)' }}>
+            <RingProgress pct={blockCompletion} size={90} strokeWidth={5} color={ringColor}>
+              <span style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--font-sans)', color: 'var(--text-primary)' }}>
+                {blockSessionCount}/{blockTotalSessions}
+              </span>
+              <span style={{ fontSize: 9, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', fontWeight: 700, letterSpacing: '0.08em', marginTop: 2 }}>
+                BLOC {currentBlock.id}
+              </span>
+            </RingProgress>
+          </StatCard>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+            <StatCard style={{ padding: 'var(--sp-3)' }}>
+              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>VOLUME BLOC</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', marginTop: 2 }}>{fmtVol(blockVolume)} <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>kg</span></div>
+            </StatCard>
+            <StatCard style={{ padding: 'var(--sp-3)' }}>
+              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>PR BATTUS</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: blockPRCount > 0 ? 'var(--accent-olympus)' : 'var(--text-primary)', marginTop: 2 }}>{blockPRCount}</div>
+            </StatCard>
+            <StatCard style={{ padding: 'var(--sp-3)' }}>
+              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>STREAK</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', marginTop: 2 }}>{streak?.currentStreak || 0}j <span style={{ fontSize: 10, color: rank.token }}>{rank.name}</span></div>
+            </StatCard>
+          </div>
+        </div>
+
+        {/* 1.4 Pentagon compact */}
+        {currentAttrs && (
+          <StatCard style={{ marginTop: 'var(--sp-3)', display: 'flex', justifyContent: 'center', padding: 'var(--sp-3)', cursor: 'pointer' }}
+            onClick={() => navigate(ROUTES.HEROS)}>
+            <Radar size={200}
+              current={ATTR_KEYS.map(k => currentAttrs[k] || 0)}
+              baseline={baselineAttrs ? ATTR_KEYS.map(k => baselineAttrs[k] || 0) : null}
+              glyph="Α" />
+          </StatCard>
+        )}
+
+        {/* ═══════ SECTION 2 — FORCE ═══════ */}
+        <SectionHeader>FORCE</SectionHeader>
+
+        {/* 2.1 Multi-lift e1RM chart */}
+        <StatCard style={{ padding: 'var(--sp-3)' }}>
+          <svg width="100%" viewBox={`0 0 ${e1rmChartW} ${e1rmChartH}`} style={{ display: 'block' }}>
+            {/* Y-axis ticks */}
+            {(() => {
+              const range = e1rmMax - e1rmMin;
+              const step = range > 100 ? 50 : range > 40 ? 20 : 10;
+              const ticks = [];
+              for (let v = Math.ceil(e1rmMin / step) * step; v <= e1rmMax; v += step) {
+                ticks.push(v);
+              }
+              return ticks.map(v => (
+                <g key={v}>
+                  <line x1={e1rmPadL} y1={e1rmY(v)} x2={e1rmChartW - e1rmPadR} y2={e1rmY(v)}
+                    stroke="var(--border-subtle)" strokeWidth="0.4" />
+                  <text x={e1rmPadL - 4} y={e1rmY(v)} textAnchor="end" dominantBaseline="middle"
+                    fontSize="8" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">{v}</text>
+                </g>
+              ));
+            })()}
+            {/* X-axis week ticks */}
+            {[1, 5, 10, 15, 20].map(w => (
+              <text key={w} x={e1rmX(w)} y={e1rmChartH - 4} textAnchor="middle"
+                fontSize="8" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">S{w}</text>
+            ))}
+            {/* Per-lift: baseline + target dashed lines + actual curve */}
+            {ATHX_STANDARDS.filter(s => liftToggles[s.id]).map(std => {
+              const pts = weeklyE1RMs[std.id] || [];
+              const baseline = declaredByLift[std.id];
+              const target = athxTargets[std.id];
+              const color = LIFT_COLORS[std.id];
+              return (
+                <g key={std.id}>
+                  {baseline > 0 && (
+                    <line x1={e1rmPadL} y1={e1rmY(baseline)} x2={e1rmChartW - e1rmPadR} y2={e1rmY(baseline)}
+                      stroke={color} strokeWidth="0.6" strokeDasharray="3 3" opacity="0.4" />
+                  )}
+                  {target > 0 && (
+                    <line x1={e1rmPadL} y1={e1rmY(target)} x2={e1rmChartW - e1rmPadR} y2={e1rmY(target)}
+                      stroke={color} strokeWidth="0.6" strokeDasharray="6 3" opacity="0.25" />
+                  )}
+                  {pts.length >= 2 && (
+                    <polyline
+                      points={pts.map(p => `${e1rmX(p.week)},${e1rmY(p.e1RM)}`).join(' ')}
+                      fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  )}
+                  {pts.map((p, i) => (
+                    <circle key={i} cx={e1rmX(p.week)} cy={e1rmY(p.e1RM)} r={2.5} fill={color} />
+                  ))}
+                </g>
+              );
+            })}
+          </svg>
+          {/* Legend toggles */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-2)', marginTop: 'var(--sp-2)' }}>
+            {ATHX_STANDARDS.map(std => (
+              <button key={std.id} type="button"
+                onClick={() => setLiftToggles(t => ({ ...t, [std.id]: !t[std.id] }))}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  padding: '3px 8px', fontSize: 10, fontWeight: 700,
+                  background: liftToggles[std.id] ? 'var(--bg-surface)' : 'transparent',
+                  border: `1px solid ${liftToggles[std.id] ? LIFT_COLORS[std.id] : 'var(--border-subtle)'}`,
+                  borderRadius: 'var(--r-sm)', cursor: 'pointer',
+                  color: liftToggles[std.id] ? LIFT_COLORS[std.id] : 'var(--text-tertiary)',
+                  fontFamily: 'var(--font-mono)', letterSpacing: '0.05em', textTransform: 'uppercase',
+                  opacity: liftToggles[std.id] ? 1 : 0.5,
+                }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: LIFT_COLORS[std.id], opacity: liftToggles[std.id] ? 1 : 0.3 }} />
+                {LIFT_SHORT[std.id]}
+              </button>
+            ))}
+          </div>
+        </StatCard>
+
+        {/* 2.2 ATHX Projection table */}
+        <StatCard style={{ marginTop: 'var(--sp-3)', padding: 'var(--sp-3)' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+            PROJECTION ATHX
+          </div>
+          <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)' }}>
+            {ATHX_STANDARDS.map(std => {
+              const proj = data.goals.find(g => g.id === std.id);
+              if (!proj) return null;
+              return (
+                <div key={std.id} style={{
+                  display: 'grid', gridTemplateColumns: '80px 55px 70px 50px', gap: 4, alignItems: 'center',
+                  padding: '4px 0', borderBottom: '1px solid var(--border-subtle)',
+                  color: 'var(--text-secondary)',
+                }}>
+                  <span style={{ color: LIFT_COLORS[std.id], fontWeight: 700 }}>{LIFT_SHORT[std.id]}</span>
+                  <span>{proj.current ? Math.round(proj.current) : '—'}</span>
+                  <span style={{ color: 'var(--text-tertiary)' }}>{proj.target ? `${Math.round(proj.target)} (×${std.targetBW})` : '—'}</span>
+                  <span style={{ color: proj.projection?.eta ? 'var(--accent-laurel)' : 'var(--text-tertiary)', fontStyle: proj.projection?.eta ? 'normal' : 'italic' }}>
+                    {proj.projection?.eta ? `${proj.projection.eta} sem` : '—'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </StatCard>
+
+        {/* 2.3 Top 5 PRs */}
+        <StatCard style={{ marginTop: 'var(--sp-3)', padding: 'var(--sp-3)' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+            TOP PR · DELTA
+          </div>
+          {topPRs.length === 0 ? (
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>Aucun PR</div>
+          ) : (
+            <>
+              {topPRs.map((pr, i) => (
+                <div key={i} style={{
+                  display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+                  padding: '4px 0', borderBottom: '1px solid var(--border-subtle)',
+                  fontSize: 11, fontFamily: 'var(--font-mono)',
+                }}>
+                  <span style={{ color: LIFT_COLORS[pr.liftKey] || 'var(--text-secondary)', fontWeight: 700, flex: '0 0 90px' }}>
+                    {pr.exerciseName}
+                  </span>
+                  <span style={{ color: 'var(--accent-olympus)', fontWeight: 700 }}>+{Math.round(pr.delta)} kg</span>
+                  <span style={{ color: 'var(--text-tertiary)', fontSize: 10, marginLeft: 'auto' }}>
+                    S{pr.week} · {Math.round(pr.e1RM)} e1RM
+                  </span>
+                </div>
+              ))}
+              {allPrs.length > 5 && (
+                <button type="button" onClick={() => setShowAllPRs(true)}
+                  style={{ marginTop: 'var(--sp-2)', fontSize: 10, color: 'var(--accent-olympus)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                  Voir tous ({allPrs.length})
+                </button>
+              )}
+            </>
+          )}
+        </StatCard>
+
+        {/* 2.4 PR Timeline */}
+        <StatCard style={{ marginTop: 'var(--sp-3)', padding: 'var(--sp-3)' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+            PR TIMELINE
+          </div>
+          <svg width="100%" viewBox={`0 0 ${prTimeW} ${prTimeH}`} style={{ display: 'block' }}>
+            {[1, 5, 10, 15, 20].map(w => (
+              <text key={w} x={prTimePadL + ((w - 1) / 19) * prTimeCW} y={prTimeH - 4} textAnchor="middle"
+                fontSize="7" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">S{w}</text>
+            ))}
+            {Object.entries(prsByWeek).map(([week, prs]) => {
+              const w = Number(week);
+              const bw = Math.max(prTimeCW / 20 - 4, 6);
+              return prs.map((pr, i) => {
+                const x = prTimePadL + ((w - 1) / 19) * prTimeCW - bw / 2 + i * (bw / Math.max(prs.length, 1));
+                const h = (pr.e1RM / maxPrE1RM) * prTimeCH;
+                return (
+                  <rect key={`${w}-${i}`} x={x} y={prTimePadT + prTimeCH - h} width={bw / Math.max(prs.length, 1) - 1} height={h}
+                    fill={LIFT_COLORS[pr.liftKey] || 'var(--accent-laurel)'} rx={1} />
+                );
+              });
+            })}
+          </svg>
+        </StatCard>
+
+        {/* ═══════ SECTION 3 — CHARGE ═══════ */}
+        <SectionHeader>CHARGE</SectionHeader>
+
+        {/* 3.1 Volume hebdo */}
+        <StatCard style={{ padding: 'var(--sp-3)' }}>
+          <svg width="100%" viewBox={`0 0 ${volChartW} ${volChartH}`} style={{ display: 'block' }}>
+            {/* Median line */}
+            {volumeMedian > 0 && (
+              <line x1={volPadL} y1={volPadT + volCH - (volumeMedian / maxVol) * volCH}
+                x2={volChartW - volPadR} y2={volPadT + volCH - (volumeMedian / maxVol) * volCH}
+                stroke="var(--text-quaternary)" strokeWidth="0.6" strokeDasharray="4 3" />
+            )}
+            {weeklyVolume.map((wv, i) => {
+              if (wv.volume === 0) return null;
+              const x = volPadL + (i / 20) * volCW + 1;
+              const h = (wv.volume / maxVol) * volCH;
+              return (
+                <g key={i}>
+                  <rect x={x} y={volPadT + volCH - h} width={volBarW} height={h}
+                    fill="var(--accent-laurel)" rx={1} />
+                  <text x={x + volBarW / 2} y={volPadT + volCH - h - 4} textAnchor="middle"
+                    fontSize="6" fontFamily="var(--font-mono)" fill="var(--text-tertiary)" fontWeight="700">
+                    {fmtVol(wv.volume)}
+                  </text>
+                </g>
+              );
+            })}
+            {[1, 5, 10, 15, 20].map(w => (
+              <text key={w} x={volPadL + ((w - 1) / 20) * volCW + volBarW / 2} y={volChartH - 4} textAnchor="middle"
+                fontSize="7" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">S{w}</text>
+            ))}
+          </svg>
+        </StatCard>
+
+        {/* 3.2 Distribution attributs (snapshot bar chart) */}
+        {currentAttrs && (
+          <StatCard style={{ marginTop: 'var(--sp-3)', padding: 'var(--sp-3)' }}>
+            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+              ATTRIBUTS · SNAPSHOT
+            </div>
+            {ATTR_KEYS.map(k => {
+              const info = ATTRIBUTES_INFO[k];
+              const val = currentAttrs[k] || 0;
+              return (
+                <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', marginBottom: 4 }}>
+                  <span style={{ width: 60, fontSize: 10, fontWeight: 700, color: info.color, fontFamily: 'var(--font-mono)' }}>
+                    {info.label}
+                  </span>
+                  <div style={{ flex: 1, height: 8, background: 'var(--bg-primary)', borderRadius: 4, overflow: 'hidden' }}>
+                    <div style={{ width: `${val * 100}%`, height: '100%', background: info.color, borderRadius: 4, transition: 'width 0.3s' }} />
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', width: 28, textAlign: 'right' }}>
+                    {Math.round(val * 100)}
+                  </span>
+                </div>
+              );
+            })}
+          </StatCard>
+        )}
+
+        {/* 3.3 Total minutes par type */}
+        {(() => {
+          const fmts = Object.keys(FORMAT_COLORS);
+          const maxMin = Math.max(...formatMinByWeek.map(w => fmts.reduce((s, f) => s + (w[f] || 0), 0)), 1);
+          const hasAny = formatMinByWeek.some(w => fmts.some(f => (w[f] || 0) > 0));
+          if (!hasAny) return null;
+          return (
+            <StatCard style={{ marginTop: 'var(--sp-3)', padding: 'var(--sp-3)' }}>
+              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+                MINUTES · PAR TYPE
+              </div>
+              <svg width="100%" viewBox={`0 0 ${volChartW} 120`} style={{ display: 'block' }}>
+                {formatMinByWeek.map((wv, i) => {
+                  const x = volPadL + (i / 20) * volCW + 1;
+                  let yOff = 0;
+                  return fmts.map(fmt => {
+                    const val = wv[fmt] || 0;
+                    if (val === 0) return null;
+                    const h = (val / maxMin) * 80;
+                    const rect = (
+                      <rect key={`${i}-${fmt}`} x={x} y={100 - yOff - h} width={volBarW} height={h}
+                        fill={FORMAT_COLORS[fmt]} rx={1} />
+                    );
+                    yOff += h;
+                    return rect;
+                  });
+                })}
+                {[1, 5, 10, 15, 20].map(w => (
+                  <text key={w} x={volPadL + ((w - 1) / 20) * volCW + volBarW / 2} y={116} textAnchor="middle"
+                    fontSize="7" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">S{w}</text>
+                ))}
+              </svg>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-2)', marginTop: 'var(--sp-2)' }}>
+                {Object.entries(FORMAT_COLORS).map(([fmt, color]) => (
+                  <span key={fmt} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 9, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+                    <span style={{ width: 6, height: 6, borderRadius: 1, background: color }} />{fmt}
+                  </span>
+                ))}
+              </div>
+            </StatCard>
+          );
+        })()}
+
+        {/* 3.4 Recovery indicator */}
+        <StatCard style={{ marginTop: 'var(--sp-3)', padding: 'var(--sp-3)', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>RECOVERY</div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: recoveryColor, fontFamily: 'var(--font-sans)' }}>
+            {recoveryDelta !== null ? `${recoveryDelta > 0 ? '+' : ''}${Math.round(recoveryDelta)}%` : '—'}
+          </div>
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+            {currentWeek > 1 ? `vs S${currentWeek - 1}` : ''}
+          </span>
+        </StatCard>
+
+        {/* ═══════ SECTION 4 — QUALITÉ ═══════ */}
+        <SectionHeader>QUALITÉ</SectionHeader>
+
+        {/* 4.1 Mètis weekly */}
+        <StatCard style={{ padding: 'var(--sp-3)' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+            MÈTIS · HEBDO
+          </div>
+          {(() => {
+            const pts = metisWeekly.filter(m => m.pct !== null);
+            if (pts.length === 0) return <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>Pas encore de données RIR</div>;
+            const chartW = 360, chartH = 120;
+            const pL = 30, pR = 12, pT = 12, pB = 24;
+            const cW = chartW - pL - pR, cH = chartH - pT - pB;
+            const xOf = (w) => pL + ((w - 1) / 19) * cW;
+            const yOf = (v) => pT + cH - (v / 100) * cH;
+            return (
+              <svg width="100%" viewBox={`0 0 ${chartW} ${chartH}`} style={{ display: 'block' }}>
+                <line x1={pL} y1={yOf(50)} x2={chartW - pR} y2={yOf(50)}
+                  stroke="var(--text-quaternary)" strokeWidth="0.5" strokeDasharray="3 3" />
+                <text x={pL - 4} y={yOf(50)} textAnchor="end" dominantBaseline="middle"
+                  fontSize="7" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">50%</text>
+                <text x={pL - 4} y={yOf(100)} textAnchor="end" dominantBaseline="middle"
+                  fontSize="7" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">100%</text>
+                {pts.length >= 2 && (
+                  <polyline points={pts.map(p => `${xOf(p.week)},${yOf(p.pct)}`).join(' ')}
+                    fill="none" stroke="var(--text-secondary)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                )}
+                {pts.map((p, i) => (
+                  <circle key={i} cx={xOf(p.week)} cy={yOf(p.pct)} r={2.5} fill="var(--text-secondary)" />
+                ))}
+                {[1, 5, 10, 15, 20].map(w => (
+                  <text key={w} x={xOf(w)} y={chartH - 4} textAnchor="middle"
+                    fontSize="7" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">S{w}</text>
+                ))}
+              </svg>
+            );
+          })()}
+        </StatCard>
+
+        {/* 4.2 RPE weekly */}
+        <StatCard style={{ marginTop: 'var(--sp-3)', padding: 'var(--sp-3)' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+            RPE MOYEN · HEBDO
+          </div>
+          {(() => {
+            if (rpeWeekly.length === 0) return <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>Pas encore de données RIR</div>;
+            const chartW = 360, chartH = 120;
+            const pL = 30, pR = 12, pT = 12, pB = 24;
+            const cW = chartW - pL - pR, cH = chartH - pT - pB;
+            const xOf = (w) => pL + ((w - 1) / 19) * cW;
+            const yOf = (v) => pT + cH - ((v - 5) / 5) * cH;
+            return (
+              <svg width="100%" viewBox={`0 0 ${chartW} ${chartH}`} style={{ display: 'block' }}>
+                {/* Zones */}
+                <rect x={pL} y={yOf(8)} width={cW} height={yOf(6) - yOf(8)} fill="rgba(62, 207, 160, 0.06)" />
+                <rect x={pL} y={yOf(9)} width={cW} height={yOf(8) - yOf(9)} fill="rgba(232, 160, 32, 0.06)" />
+                <rect x={pL} y={yOf(10)} width={cW} height={yOf(9) - yOf(10)} fill="rgba(224, 90, 74, 0.06)" />
+                {[6, 7, 8, 9, 10].map(v => (
+                  <text key={v} x={pL - 4} y={yOf(v)} textAnchor="end" dominantBaseline="middle"
+                    fontSize="7" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">{v}</text>
+                ))}
+                {rpeWeekly.length >= 2 && (
+                  <polyline points={rpeWeekly.map(p => `${xOf(p.week)},${yOf(p.rpe)}`).join(' ')}
+                    fill="none" stroke="var(--accent-olympus)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                )}
+                {rpeWeekly.map((p, i) => (
+                  <circle key={i} cx={xOf(p.week)} cy={yOf(p.rpe)} r={2.5} fill="var(--accent-olympus)" />
+                ))}
+                {[1, 5, 10, 15, 20].map(w => (
+                  <text key={w} x={xOf(w)} y={chartH - 4} textAnchor="middle"
+                    fontSize="7" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">S{w}</text>
+                ))}
+              </svg>
+            );
+          })()}
+        </StatCard>
+
+        {/* 4.3 Sessions ratées */}
+        <StatCard style={{ marginTop: 'var(--sp-3)', padding: 'var(--sp-3)', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>RATÉES</div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: missedSessions.length > 0 ? 'var(--accent-blood)' : 'var(--accent-laurel)', fontFamily: 'var(--font-sans)' }}>
+            {missedSessions.length}
+          </div>
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+            sessions sur le bloc
+          </span>
+        </StatCard>
+
+        {/* ═══════ SECTION 5 — PERFORMANCE PAR JOUR ═══════ */}
+        <SectionHeader>PERFORMANCE</SectionHeader>
+
+        {/* 5.1 Volume moyen par jour */}
+        <StatCard style={{ padding: 'var(--sp-3)' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+            VOLUME MOYEN · PAR JOUR
+          </div>
+          {avgVolByDay.map((d, i) => {
+            const maxAvg = avgVolByDay[0]?.avgVol || 1;
+            return (
+              <div key={d.day} style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', marginBottom: 4 }}>
+                <span style={{ width: 56, fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{d.dayFr}</span>
+                <div style={{ flex: 1, height: 10, background: 'var(--bg-primary)', borderRadius: 4, overflow: 'hidden' }}>
+                  <div style={{ width: `${maxAvg > 0 ? (d.avgVol / maxAvg) * 100 : 0}%`, height: '100%', background: i === 0 && d.avgVol > 0 ? 'var(--accent-laurel)' : 'var(--accent-laurel)', opacity: i === 0 ? 1 : 0.5, borderRadius: 4 }} />
+                </div>
+                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', width: 48, textAlign: 'right' }}>
+                  {fmtVol(d.avgVol)} kg
+                </span>
+              </div>
+            );
+          })}
+        </StatCard>
+
+        {/* 5.2 PR par jour */}
+        <StatCard style={{ marginTop: 'var(--sp-3)', padding: 'var(--sp-3)' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+            PR · PAR JOUR
+          </div>
+          <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)' }}>
+            {prByDay.map(d => (
+              <div key={d.day} style={{
+                display: 'grid', gridTemplateColumns: '56px 40px 1fr', gap: 4,
+                padding: '3px 0', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-secondary)',
+              }}>
+                <span style={{ fontWeight: 700 }}>{d.dayFr}</span>
+                <span style={{ color: d.count > 0 ? 'var(--accent-olympus)' : 'var(--text-tertiary)' }}>{d.count}</span>
+                <span style={{ color: 'var(--text-tertiary)' }}>
+                  {d.best ? `${d.best.exerciseName} ${Math.round(d.best.e1RM)}` : '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </StatCard>
+
+        {/* ═══════ SECTION 6 — INSIGHTS ═══════ */}
+        <SectionHeader>INSIGHTS</SectionHeader>
+
+        {insights.length === 0 ? (
+          <StatCard style={{ padding: 'var(--sp-4)' }}>
+            <div style={{ fontSize: 12, color: 'var(--text-tertiary)', fontStyle: 'italic', fontFamily: 'var(--font-greek)' }}>
+              Pas encore assez de données pour générer des insights
+            </div>
+          </StatCard>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+            {insights.slice(0, 5).map((ins, i) => (
+              <StatCard key={i} style={{ padding: 'var(--sp-3)' }}>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{ins}</div>
+              </StatCard>
+            ))}
+          </div>
+        )}
+
+        {/* ═══════ SECTION 7 — GOALS TRACKER ═══════ */}
+        <SectionHeader>GOALS · ATHX</SectionHeader>
+
+        <StatCard style={{ padding: 'var(--sp-3)' }}>
+          {goals.map(g => {
+            const statusIcon = g.status === 'green' ? '🟢' : g.status === 'yellow' ? '🟡' : '🔴';
+            return (
+              <button key={g.id} type="button" onClick={() => setGoalDrill(goalDrill === g.id ? null : g.id)}
+                style={{
+                  width: '100%', background: 'transparent', border: 'none', cursor: 'pointer',
+                  display: 'grid', gridTemplateColumns: '20px 70px 48px 60px 40px 20px', gap: 4, alignItems: 'center',
+                  padding: '6px 0', borderBottom: '1px solid var(--border-subtle)',
+                  fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', textAlign: 'left',
+                }}>
+                <span>{statusIcon}</span>
+                <span style={{ fontWeight: 700, color: LIFT_COLORS[g.id] }}>{LIFT_SHORT[g.id]}</span>
+                <span>{g.current ? Math.round(g.current) : '—'}</span>
+                <span style={{ color: 'var(--text-tertiary)' }}>{g.target ? Math.round(g.target) : '—'} ({g.ratioBW ? g.ratioBW.toFixed(2) : '—'})</span>
+                <span style={{ color: 'var(--accent-laurel)' }}>{Math.round(g.progress * 100)}%</span>
+                <span style={{ color: 'var(--text-tertiary)' }}>{goalDrill === g.id ? '▲' : '▼'}</span>
+              </button>
+            );
+          })}
+        </StatCard>
+
+        {/* Goal drill-down */}
+        {goalDrill && (() => {
+          const g = goals.find(x => x.id === goalDrill);
+          if (!g) return null;
+          const pts = weeklyE1RMs[g.id] || [];
+          const baseline = declaredByLift[g.id];
+          const target = athxTargets[g.id];
+          if (pts.length === 0 && !baseline) return null;
+          const allVals = [...pts.map(p => p.e1RM), baseline, target].filter(Boolean);
+          const minV = Math.min(...allVals) - 5;
+          const maxV = Math.max(...allVals) + 5;
+          const chartW = 340, chartH = 160;
+          const pL = 36, pR = 12, pT = 12, pB = 24;
+          const cW = chartW - pL - pR, cH = chartH - pT - pB;
+          const xOf = (w) => pL + ((w - 1) / 19) * cW;
+          const yOf = (v) => pT + cH - ((v - minV) / (maxV - minV || 1)) * cH;
+          const liftPrs = allPrs.filter(p => p.liftKey === g.id).sort((a, b) => b.e1RM - a.e1RM).slice(0, 5);
+          return (
+            <StatCard style={{ marginTop: 'var(--sp-2)', padding: 'var(--sp-3)' }}>
+              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: LIFT_COLORS[g.id], fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+                {g.name} · DRILL-DOWN
+              </div>
+              <svg width="100%" viewBox={`0 0 ${chartW} ${chartH}`} style={{ display: 'block' }}>
+                {baseline > 0 && (
+                  <line x1={pL} y1={yOf(baseline)} x2={chartW - pR} y2={yOf(baseline)}
+                    stroke="var(--text-tertiary)" strokeWidth="0.6" strokeDasharray="3 3" />
+                )}
+                {target > 0 && (
+                  <line x1={pL} y1={yOf(target)} x2={chartW - pR} y2={yOf(target)}
+                    stroke={LIFT_COLORS[g.id]} strokeWidth="0.6" strokeDasharray="6 3" opacity="0.4" />
+                )}
+                {pts.length >= 2 && (
+                  <polyline points={pts.map(p => `${xOf(p.week)},${yOf(p.e1RM)}`).join(' ')}
+                    fill="none" stroke={LIFT_COLORS[g.id]} strokeWidth="1.5" strokeLinecap="round" />
+                )}
+                {pts.map((p, i) => (
+                  <circle key={i} cx={xOf(p.week)} cy={yOf(p.e1RM)} r={2.5} fill={LIFT_COLORS[g.id]} />
+                ))}
+                {baseline > 0 && (
+                  <text x={pL - 4} y={yOf(baseline)} textAnchor="end" dominantBaseline="middle"
+                    fontSize="8" fontFamily="var(--font-mono)" fill="var(--text-tertiary)">{baseline}</text>
+                )}
+                {target > 0 && (
+                  <text x={pL - 4} y={yOf(target)} textAnchor="end" dominantBaseline="middle"
+                    fontSize="8" fontFamily="var(--font-mono)" fill={LIFT_COLORS[g.id]}>{Math.round(target)}</text>
+                )}
+                {[1, 5, 10, 15, 20].map(w => (
+                  <text key={w} x={xOf(w)} y={chartH - 4} textAnchor="middle"
+                    fontSize="7" fontFamily="var(--font-mono)" fill="var(--text-quaternary)">S{w}</text>
+                ))}
+              </svg>
+              {liftPrs.length > 0 && (
+                <div style={{ marginTop: 'var(--sp-2)' }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
+                    PR · {g.name.toUpperCase()}
+                  </div>
+                  {liftPrs.map((pr, i) => (
+                    <div key={i} style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', padding: '2px 0' }}>
+                      S{pr.week} · {pr.weight}×{pr.reps} · <span style={{ color: 'var(--accent-olympus)' }}>{Math.round(pr.e1RM)} e1RM</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </StatCard>
+          );
+        })()}
+
+        {/* ═══════ MODALS ═══════ */}
+
+        {/* Heatmap cell detail modal */}
+        {heatmapModal && (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'var(--sp-4)',
+          }} onClick={() => setHeatmapModal(null)}>
+            <div style={{
+              background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--r-lg)', padding: 'var(--sp-4)', maxWidth: 340, width: '100%',
+            }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--sp-3)' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>
+                  S{heatmapModal.week} · {STRENGTH_DAY_FR[heatmapModal.day] || heatmapModal.day}
+                </span>
+                <button type="button" onClick={() => setHeatmapModal(null)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 18 }}>✕</button>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+                Volume : {fmtVol(heatmapModal.vol)} kg
+              </div>
+              {heatmapModal.prs.length > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--accent-olympus)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+                  {heatmapModal.prs.length} PR : {heatmapModal.prs.map(p => `${p.exerciseName} ${Math.round(p.e1RM)}`).join(', ')}
+                </div>
+              )}
+              {heatmapModal.sets.length > 0 && (
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', maxHeight: 200, overflow: 'auto' }}>
+                  {heatmapModal.sets.map((s, i) => (
+                    <div key={i} style={{ padding: '2px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                      {s.exerciseName} · {s.weight || '—'}×{s.reps || '—'} {s.e1RM ? `· ${Math.round(s.e1RM)} e1RM` : ''}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* All PRs modal */}
+        {showAllPRs && (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'var(--sp-4)',
+          }} onClick={() => setShowAllPRs(false)}>
+            <div style={{
+              background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--r-lg)', padding: 'var(--sp-4)', maxWidth: 380, width: '100%', maxHeight: '70vh', overflow: 'auto',
+            }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--sp-3)' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>TOUS LES PR</span>
+                <button type="button" onClick={() => setShowAllPRs(false)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 18 }}>✕</button>
+              </div>
+              {allPrs.map((pr, i) => (
+                <div key={i} style={{
+                  display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+                  padding: '4px 0', borderBottom: '1px solid var(--border-subtle)',
+                  fontSize: 10, fontFamily: 'var(--font-mono)',
+                }}>
+                  <span style={{ color: LIFT_COLORS[pr.liftKey] || 'var(--text-secondary)', fontWeight: 700, width: 80 }}>{pr.exerciseName}</span>
+                  <span style={{ color: 'var(--accent-olympus)' }}>+{Math.round(pr.delta)} kg</span>
+                  <span style={{ color: 'var(--text-tertiary)', marginLeft: 'auto' }}>S{pr.week} · {Math.round(pr.e1RM)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const HerosPage = () => {
     const [refresh, setRefresh] = useState(0);
     const heroStats = useHeroStats(refresh);
@@ -8282,7 +9446,7 @@
                 <Route path={ROUTES.HEROS}       element={<HerosPage />} />
                 <Route path={ROUTES.PROGRESSION} element={<HerosPage />} />
                 <Route path={ROUTES.CARTE}       element={<CartePage />} />
-                <Route path={ROUTES.STATS}       element={<HerosPage />} />
+                <Route path={ROUTES.STATS}       element={<StatsPage />} />
                 <Route path={ROUTES.REGLAGES}    element={<ReglagesPage />} />
                 <Route path="*" element={<AujourdhuiPage />} />
               </Routes>
