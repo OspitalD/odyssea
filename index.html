@@ -1415,6 +1415,38 @@
     };
   }
 
+  let _attrComputeLock = null;
+  async function ensureAttributes(blockId) {
+    if (_attrComputeLock) return _attrComputeLock;
+    _attrComputeLock = (async () => {
+      let baseline = await db.attributes.where('type').equals('baseline').first();
+      if (!baseline) {
+        const oneRMs = await db.oneRMs.toArray();
+        if (oneRMs.length > 0) {
+          const baseVals = await computeBaselineAttributes();
+          const row = { type: 'baseline', ...baseVals, computedAt: new Date().toISOString() };
+          const id = await db.attributes.add(row);
+          baseline = { ...row, id };
+        }
+      }
+      const currentVals = await computeAttributesLive(blockId);
+      const currentRow = { type: 'current', ...currentVals, computedAt: new Date().toISOString() };
+      const existingCurrent = await db.attributes.where('type').equals('current').first();
+      if (existingCurrent) {
+        await db.attributes.update(existingCurrent.id, currentRow);
+      } else {
+        await db.attributes.add(currentRow);
+      }
+      _attrComputeLock = null;
+      return {
+        current: currentVals,
+        baseline: baseline || { sthenos: 0, bia: 0, ponos: 0, metis: 0.5, arete: 0, breakdown: null },
+        breakdown: currentVals.breakdown,
+      };
+    })();
+    return _attrComputeLock;
+  }
+
   const useAttributes = (refreshKey = 0) => {
     const [attrs, setAttrs] = useState(null);
     useEffect(() => {
@@ -1422,30 +1454,9 @@
       (async () => {
         const week = getCurrentWeek();
         const blockId = getCurrentBlock(week).id;
-        let baseline = await db.attributes.where('type').equals('baseline').first();
-        if (!baseline) {
-          const oneRMs = await db.oneRMs.toArray();
-          if (oneRMs.length > 0) {
-            const baseVals = await computeBaselineAttributes();
-            const row = { type: 'baseline', ...baseVals, computedAt: new Date().toISOString() };
-            const id = await db.attributes.add(row);
-            baseline = { ...row, id };
-          }
-        }
-        const currentVals = await computeAttributesLive(blockId);
-        const currentRow = { type: 'current', ...currentVals, computedAt: new Date().toISOString() };
-        const existingCurrent = await db.attributes.where('type').equals('current').first();
-        if (existingCurrent) {
-          await db.attributes.update(existingCurrent.id, currentRow);
-        } else {
-          await db.attributes.add(currentRow);
-        }
+        const result = await ensureAttributes(blockId);
         if (alive) {
-          setAttrs({
-            current: currentVals,
-            baseline: baseline || { sthenos: 0, bia: 0, ponos: 0, metis: 0.5, arete: 0, breakdown: null },
-            breakdown: currentVals.breakdown,
-          });
+          setAttrs(result);
         }
       })();
       return () => { alive = false; };
