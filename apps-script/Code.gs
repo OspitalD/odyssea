@@ -6,6 +6,18 @@
 const SPREADSHEET_ID = '1yDzf5Ug_hkEe_x-Td1peTRrYGDAMXQUKzNPi-TccqWU';
 
 const SESSION_ROW = { Monday: 8, Wednesday: 36, Friday: 63, Saturday: 90 };
+
+const SETS_EXTENDED_HEADERS = [
+  'timestamp', 'week', 'sessionDay', 'exerciseSlot', 'setNumber',
+  'exerciseName', 'format', 'weight', 'reps', 'rir', 'e1RM',
+  'totalReps', 'durationMinutes', 'jumpHeight', 'jumpDistance',
+  'isTopSet', 'isBackOff', 'completedAt'
+];
+
+const USER_SESSIONS_HEADERS = [
+  'timestamp', 'week', 'sessionDay', 'configurationJson',
+  'setsJson', 'completedAt', 'notes'
+];
 const SLOT_WEIGHT_COL = { 1: 'E', 2: 'K', 3: 'Q', 4: 'W' };
 const SLOT_REPS_COL   = { 1: 'F', 2: 'L', 3: 'R', 4: 'X' };
 const SLOT_RIR_COL    = { 1: 'G', 2: 'M', 3: 'S', 4: 'Y' };
@@ -23,6 +35,8 @@ function doPost(e) {
     if (action === 'readSession') return jsonResponse(readSession(body));
     if (action === 'readWeek') return jsonResponse(readWeek(body));
     if (action === 'writeUserSession') return jsonResponse(writeUserSession(body));
+    if (action === 'readSets')         return readSets(body);
+    if (action === 'readUserSessions') return readUserSessions(body);
     return jsonResponse({ ok: false, error: 'Unknown action: ' + action });
   } catch (err) {
     return jsonResponse({ ok: false, error: err.message });
@@ -37,7 +51,7 @@ function doGet(e) {
     ok: true,
     message: 'Odyssea backend is live',
     timestamp: new Date().toISOString(),
-    actions: ['writeSet', 'readSession', 'readWeek', 'writeUserSession'],
+    actions: ['writeSet', 'readSession', 'readWeek', 'writeUserSession', 'readSets', 'readUserSessions'],
     sheets: {
       'Sets Extended': setsExtended,
       'User Sessions': userSessions
@@ -232,4 +246,60 @@ function readWeek(data) {
     result[days[i]] = resp.slots;
   }
   return { ok: true, week: data.week, sessions: result };
+}
+
+// ============================================================
+//  readSets  (bulk read Sets Extended for recovery sync)
+// ============================================================
+
+function readSets(data) {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var setsExt = ss.getSheetByName('Sets Extended');
+  if (!setsExt) {
+    return jsonResponse({ ok: false, error: "Sheet 'Sets Extended' missing" });
+  }
+  var lastRow = setsExt.getLastRow();
+  if (lastRow < 2) {
+    return jsonResponse({ ok: true, sets: [] });
+  }
+  var range = setsExt.getRange(2, 1, lastRow - 1, SETS_EXTENDED_HEADERS.length);
+  var values = range.getValues();
+  var sets = values.map(function(row) {
+    var obj = {};
+    SETS_EXTENDED_HEADERS.forEach(function(header, i) {
+      obj[header] = row[i];
+    });
+    return obj;
+  }).filter(function(s) { return s.timestamp; });
+  return jsonResponse({ ok: true, sets: sets });
+}
+
+// ============================================================
+//  readUserSessions  (bulk read User Sessions for recovery sync)
+// ============================================================
+
+function readUserSessions(data) {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var userSess = ss.getSheetByName('User Sessions');
+  if (!userSess) {
+    return jsonResponse({ ok: false, error: "Sheet 'User Sessions' missing" });
+  }
+  var lastRow = userSess.getLastRow();
+  if (lastRow < 2) {
+    return jsonResponse({ ok: true, sessions: [] });
+  }
+  var range = userSess.getRange(2, 1, lastRow - 1, USER_SESSIONS_HEADERS.length);
+  var values = range.getValues();
+  var sessions = values.map(function(row) {
+    var obj = {};
+    USER_SESSIONS_HEADERS.forEach(function(header, i) {
+      obj[header] = row[i];
+    });
+    try { obj.configuration = JSON.parse(obj.configurationJson); } catch (e) { obj.configuration = {}; }
+    try { obj.sets = JSON.parse(obj.setsJson); } catch (e) { obj.sets = []; }
+    delete obj.configurationJson;
+    delete obj.setsJson;
+    return obj;
+  }).filter(function(s) { return s.timestamp; });
+  return jsonResponse({ ok: true, sessions: sessions });
 }

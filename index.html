@@ -1077,6 +1077,99 @@
   }
 
   /* ==========================================================
+     SYNC RECOVERY — Pull sets/sessions from backend after wipe
+     V1 = one-shot recovery, no incremental sync.
+     ========================================================== */
+  async function syncSetsFromBackend({ force = false } = {}) {
+    if (!force) {
+      const localCount = await db.sets.count();
+      if (localCount > 0) {
+        console.log('[sync] db.sets not empty, skip');
+        return { skipped: true };
+      }
+    }
+    try {
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'readSets' }),
+      });
+      const data = await res.json();
+      if (!data.ok || !Array.isArray(data.sets)) {
+        console.warn('[sync] readSets failed:', data.error);
+        return { error: data.error };
+      }
+      if (data.sets.length === 0) {
+        console.log('[sync] no remote sets to pull');
+        return { pulled: 0 };
+      }
+      const rows = data.sets.map(s => ({
+        week: Number(s.week),
+        sessionDay: s.sessionDay,
+        exerciseSlot: Number(s.exerciseSlot),
+        setNumber: Number(s.setNumber),
+        exerciseName: s.exerciseName || '',
+        format: s.format || 'traditional',
+        weight: typeof s.weight === 'number' ? s.weight : null,
+        reps: typeof s.reps === 'number' ? s.reps : null,
+        rir: typeof s.rir === 'number' ? s.rir : null,
+        e1RM: typeof s.e1RM === 'number' ? s.e1RM : null,
+        totalReps: typeof s.totalReps === 'number' ? s.totalReps : null,
+        durationMinutes: typeof s.durationMinutes === 'number' ? s.durationMinutes : null,
+        jumpHeight: typeof s.jumpHeight === 'number' ? s.jumpHeight : null,
+        jumpDistance: typeof s.jumpDistance === 'number' ? s.jumpDistance : null,
+        isTopSet: !!s.isTopSet,
+        isBackOff: !!s.isBackOff,
+        completedAt: s.completedAt || s.timestamp || new Date().toISOString(),
+        block: getCurrentBlock(Number(s.week)).id,
+        synced: true,
+      }));
+      await db.sets.bulkAdd(rows);
+      console.log(`[sync] pulled ${rows.length} sets from backend`);
+      return { pulled: rows.length };
+    } catch (e) {
+      console.warn('[sync] syncSetsFromBackend error:', e);
+      return { error: e.message };
+    }
+  }
+
+  async function syncSessionsFromBackend({ force = false } = {}) {
+    if (!force) {
+      const localCount = await db.sessions.count();
+      if (localCount > 0) {
+        console.log('[sync] db.sessions not empty, skip');
+        return { skipped: true };
+      }
+    }
+    try {
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'readUserSessions' }),
+      });
+      const data = await res.json();
+      if (!data.ok || !Array.isArray(data.sessions)) {
+        console.warn('[sync] readUserSessions failed:', data.error);
+        return { error: data.error };
+      }
+      if (data.sessions.length === 0) {
+        console.log('[sync] no remote sessions to pull');
+        return { pulled: 0 };
+      }
+      const rows = data.sessions.map(s => ({
+        week: Number(s.week),
+        sessionDay: s.sessionDay,
+        completedAt: s.completedAt || s.timestamp || new Date().toISOString(),
+        syncedAt: new Date().toISOString(),
+      }));
+      await db.sessions.bulkAdd(rows);
+      console.log(`[sync] pulled ${rows.length} sessions from backend`);
+      return { pulled: rows.length };
+    } catch (e) {
+      console.warn('[sync] syncSessionsFromBackend error:', e);
+      return { error: e.message };
+    }
+  }
+
+  /* ==========================================================
      STREAK SYSTEM (SPEC v5 §7.2)
      - Tolérance 4 jours : ≤ 4 j sans session = streak continue
      - > 4 j sans session = streak break, repart à 1
@@ -7572,6 +7665,9 @@
     const [bwSaved, setBwSaved] = useState(false);
     const [resyncState, setResyncState] = useState({ status: 'idle', msg: '' });
     const [resyncConfirm, setResyncConfirm] = useState(false);
+    const [histSyncState, setHistSyncState] = useState({ status: 'idle', msg: '' });
+    const [histSyncConfirm, setHistSyncConfirm] = useState(false);
+    const [histHasLocal, setHistHasLocal] = useState(false);
 
     const doResync = async () => {
       setResyncConfirm(false);
@@ -7588,6 +7684,33 @@
       } catch (e) {
         setResyncState({ status: 'err', msg: 'Erreur — pas de connexion ?' });
       }
+    };
+
+    const doHistSync = async () => {
+      setHistSyncConfirm(false);
+      setHistSyncState({ status: 'loading', msg: 'RESYNC...' });
+      try {
+        if (histHasLocal) {
+          await db.sets.clear();
+          await db.sessions.clear();
+        }
+        const setsResult = await syncSetsFromBackend({ force: true });
+        const sessResult = await syncSessionsFromBackend({ force: true });
+        if (setsResult.error) throw new Error(setsResult.error);
+        if (sessResult.error) throw new Error(sessResult.error);
+        const sp = setsResult.pulled || 0;
+        const se = sessResult.pulled || 0;
+        setHistSyncState({ status: 'ok', msg: `Historique restauré · ${sp} sets · ${se} sessions` });
+      } catch (e) {
+        setHistSyncState({ status: 'err', msg: 'Erreur — pas de connexion ?' });
+      }
+    };
+
+    const openHistSync = async () => {
+      const [sc, sec] = await Promise.all([db.sets.count(), db.sessions.count()]);
+      setHistHasLocal(sc > 0 || sec > 0);
+      setHistSyncConfirm(true);
+      setHistSyncState({ status: 'idle', msg: '' });
     };
 
     useEffect(() => {
@@ -7918,6 +8041,53 @@
         <RepriseSemaineCard />
         <Card style={{ marginTop: 12 }}>
           <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+            Historique
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 10 }}>
+            Récupère ton historique de sets et sessions depuis la sheet. Utile après un wipe ou changement de device.
+          </div>
+          {histSyncConfirm ? (
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-primary)', marginBottom: 10 }}>
+                {histHasLocal
+                  ? 'Cela va remplacer ton historique local par celui de la sheet. Tes données locales seront perdues. Continuer ?'
+                  : 'Resync historique depuis la sheet ?'}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" onClick={() => setHistSyncConfirm(false)}
+                  style={{
+                    flex: 1, background: 'transparent', border: '1px solid var(--border-strong)',
+                    borderRadius: 10, color: 'var(--text-secondary)', padding: '10px 14px',
+                    fontSize: 12, fontWeight: 700, letterSpacing: '0.4px', textTransform: 'uppercase', cursor: 'pointer',
+                  }}>ANNULER</button>
+                <button type="button" onClick={doHistSync}
+                  style={{
+                    flex: 1, background: histHasLocal ? 'var(--accent-blood)' : 'var(--accent-olympus)', border: 'none',
+                    borderRadius: 10, color: histHasLocal ? '#fff' : '#0D0F0E', padding: '10px 14px',
+                    fontSize: 12, fontWeight: 800, letterSpacing: '0.4px', textTransform: 'uppercase', cursor: 'pointer',
+                  }}>CONFIRMER</button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" onClick={openHistSync}
+              disabled={histSyncState.status === 'loading'}
+              style={{
+                background: 'transparent', border: '1px solid var(--border-strong)',
+                borderRadius: 10, color: histSyncState.status === 'loading' ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                padding: '8px 14px', fontSize: 12, fontWeight: 700,
+                letterSpacing: '0.4px', textTransform: 'uppercase',
+                cursor: histSyncState.status === 'loading' ? 'not-allowed' : 'pointer',
+              }}>{histSyncState.status === 'loading' ? 'RESYNC...' : 'RESYNC HISTORIQUE'}</button>
+          )}
+          {histSyncState.status !== 'idle' && histSyncState.status !== 'loading' && (
+            <div style={{
+              marginTop: 10, fontSize: 13,
+              color: histSyncState.status === 'ok' ? 'var(--accent-laurel)' : 'var(--accent-blood)',
+            }}>{histSyncState.msg}</div>
+          )}
+        </Card>
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
             Sons
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 10 }}>
@@ -8065,6 +8235,11 @@
 
       seedIfEmpty().then(r => {
         if (r.ok && !r.skipped) setSeedTick(t => t + 1);
+        // Recovery sync: pull sets/sessions from backend if local DB was wiped.
+        syncSetsFromBackend().then(sr => {
+          if (sr.pulled > 0) setSeedTick(t => t + 1);
+        }).catch(() => {});
+        syncSessionsFromBackend().catch(() => {});
       });
       // Sync les sets stockés offline au lancement (no-op si online et tout déjà sync).
       syncPendingSets().catch(() => {});
