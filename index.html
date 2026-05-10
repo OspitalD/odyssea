@@ -1591,6 +1591,29 @@
     return suggestion;
   };
 
+  const useWeekOverride = () => {
+    const [override, setOverride] = useState(null);
+    const [loaded, setLoaded] = useState(false);
+    useEffect(() => {
+      db.prefs.get('weekOverride').then(row => {
+        if (row?.value && row.value.expiresAt > Date.now()) {
+          setOverride(row.value);
+        }
+        setLoaded(true);
+      }).catch(() => setLoaded(true));
+    }, []);
+    const clearOverride = async () => {
+      await db.prefs.delete('weekOverride');
+      setOverride(null);
+    };
+    return [override, clearOverride, loaded];
+  };
+
+  const useCurrentWeek = () => {
+    const [ovr] = useWeekOverride();
+    return ovr ? ovr.week : getCurrentWeek();
+  };
+
   // Hook : Standards ATHX avec overlay des 1RM déclarés (db.oneRMs).
   // Recalcule via computeStandards en passant la map { exerciseName →
   // e1RM déclaré le plus récent }. N'affecte PAS computeHeroStats ni les
@@ -3190,11 +3213,13 @@
   // ExoCard : 1 carte par exo, accordéon, saisie set complète.
   const ExoCard = ({ ex, week, sessionDay, sets, isOpen, onToggle, onSetValidated, onBadgesUnlocked }) => {
     const lastSet = sets && sets.length ? sets[sets.length - 1] : null;
-    const [weight, setWeight] = useState(() => lastSet?.weight ?? 0);
+    const [weight, setWeightRaw] = useState(() => lastSet?.weight ?? 0);
     const [reps, setReps] = useState(() => lastSet?.reps ?? 5);
     const [rir, setRir] = useState(() => lastSet?.rir ?? 2);
     const [jumpHeight, setJumpHeight] = useState(0);
     const [jumpDistance, setJumpDistance] = useState(0);
+    const [userTouchedWeight, setUserTouchedWeight] = useState(false);
+    const setWeight = (v) => { setUserTouchedWeight(true); setWeightRaw(v); };
 
     const [formatOverride, setFormatOverride] = useFormatOverride(week, sessionDay, ex.exerciseSlot);
     const detectedFormat = detectFormat(ex.prescription, ex.exerciseName);
@@ -3209,9 +3234,19 @@
       return 0;
     });
 
+    const weekSuggestion = useSuggestion(week, sessionDay, ex.exerciseSlot);
+    const suggestionApplied = weekSuggestion?.suggestedWeight != null
+      && !userTouchedWeight && (!sets || sets.length === 0);
+
+    useEffect(() => {
+      if (weekSuggestion?.suggestedWeight != null && (!sets || sets.length === 0) && !userTouchedWeight) {
+        setWeightRaw(weekSuggestion.suggestedWeight);
+      }
+    }, [weekSuggestion]);
+
     useEffect(() => {
       if (lastSet) {
-        setWeight(lastSet.weight);
+        setWeightRaw(lastSet.weight);
         setReps(lastSet.reps);
         setRir(lastSet.rir);
       }
@@ -3436,7 +3471,7 @@
           )}
         </div>
         <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>Weight{suggestionApplied && <span style={{ fontSize: 10, color: 'var(--accent-laurel)', border: '1px solid var(--accent-laurel)', borderRadius: 4, padding: '2px 4px', textTransform: 'none', letterSpacing: '0.3px', fontWeight: 600 }}>Suggéré S{weekSuggestion.sourceWeek}</span>}</div>
           <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
         </div>
         <div style={{ marginBottom: 10 }}>
@@ -3473,7 +3508,7 @@
           )}
         </div>
         <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>Weight{suggestionApplied && <span style={{ fontSize: 10, color: 'var(--accent-laurel)', border: '1px solid var(--accent-laurel)', borderRadius: 4, padding: '2px 4px', textTransform: 'none', letterSpacing: '0.3px', fontWeight: 600 }}>Suggéré S{weekSuggestion.sourceWeek}</span>}</div>
           <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
         </div>
         <div style={{ marginBottom: 10 }}>
@@ -3504,7 +3539,7 @@
         </div>
         {weight > 0 && (
           <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+            <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>Weight{suggestionApplied && <span style={{ fontSize: 10, color: 'var(--accent-laurel)', border: '1px solid var(--accent-laurel)', borderRadius: 4, padding: '2px 4px', textTransform: 'none', letterSpacing: '0.3px', fontWeight: 600 }}>Suggéré S{weekSuggestion.sourceWeek}</span>}</div>
             <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={24} />
           </div>
         )}
@@ -3551,7 +3586,7 @@
             </div>
           )}
           <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+            <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>Weight{suggestionApplied && <span style={{ fontSize: 10, color: 'var(--accent-laurel)', border: '1px solid var(--accent-laurel)', borderRadius: 4, padding: '2px 4px', textTransform: 'none', letterSpacing: '0.3px', fontWeight: 600 }}>Suggéré S{weekSuggestion.sourceWeek}</span>}</div>
             <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
           </div>
           <div style={{ marginBottom: 10 }}>
@@ -3598,7 +3633,7 @@
           </div>
         )}
         <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>Weight{suggestionApplied && <span style={{ fontSize: 10, color: 'var(--accent-laurel)', border: '1px solid var(--accent-laurel)', borderRadius: 4, padding: '2px 4px', textTransform: 'none', letterSpacing: '0.3px', fontWeight: 600 }}>Suggéré S{weekSuggestion.sourceWeek}</span>}</div>
           <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
         </div>
         <div style={{ marginBottom: 10 }}>
@@ -3644,7 +3679,7 @@
           </div>
         )}
         <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>Weight{suggestionApplied && <span style={{ fontSize: 10, color: 'var(--accent-laurel)', border: '1px solid var(--accent-laurel)', borderRadius: 4, padding: '2px 4px', textTransform: 'none', letterSpacing: '0.3px', fontWeight: 600 }}>Suggéré S{weekSuggestion.sourceWeek}</span>}</div>
           <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
         </div>
         <div style={{ marginBottom: 10 }}>
@@ -3681,7 +3716,7 @@
           )}
         </div>
         <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4 }}>Weight</div>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>Weight{suggestionApplied && <span style={{ fontSize: 10, color: 'var(--accent-laurel)', border: '1px solid var(--accent-laurel)', borderRadius: 4, padding: '2px 4px', textTransform: 'none', letterSpacing: '0.3px', fontWeight: 600 }}>Suggéré S{weekSuggestion.sourceWeek}</span>}</div>
           <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
         </div>
         <div style={{ marginBottom: 10 }}>
@@ -5118,7 +5153,8 @@
   const AujourdhuiPage = () => {
     const { query } = useLocation();
     const navigate = useNavigate();
-    const week = getCurrentWeek();
+    const [weekOverride, clearWeekOverride] = useWeekOverride();
+    const week = weekOverride ? weekOverride.week : getCurrentWeek();
     const block = getCurrentBlock(week);
     const todayDay = WEEK_DAYS.find(d => d.idx === getCurrentWeekDayIdx());
     const requestedDay = query.day || ((todayDay?.strength || todayDay?.userDefined) ? todayDay.sessionDay : null);
@@ -5561,6 +5597,28 @@
               lineHeight: 1, marginTop: -4,
             }}>{block.glyph}</span>
           </div>
+
+          {weekOverride && (
+            <div style={{
+              background: 'rgba(185,144,224,0.08)',
+              borderBottom: '1px solid var(--accent-laurel)',
+              padding: '8px 16px',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              marginBottom: 'var(--sp-2)',
+              borderRadius: 'var(--r-sm)',
+            }}>
+              <span style={{
+                fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
+                color: 'var(--accent-royal)', letterSpacing: '0.15em', textTransform: 'uppercase',
+              }}>MODE REPRISE · SEM {weekOverride.week}</span>
+              <button type="button" onClick={clearWeekOverride} style={{
+                background: 'transparent', border: '1px solid var(--border-strong)',
+                borderRadius: 6, color: 'var(--text-secondary)', padding: '4px 10px',
+                fontSize: 10, fontWeight: 700, letterSpacing: '0.8px', textTransform: 'uppercase',
+                cursor: 'pointer',
+              }}>Annuler</button>
+            </div>
+          )}
 
           {/* Inscription séance type */}
           <div className="ody-tablet" style={{
@@ -7007,6 +7065,59 @@
     );
   };
 
+  const RepriseSemaineCard = () => {
+    const [confirm, setConfirm] = useState(false);
+    const [done, setDone] = useState(false);
+    const activate = async () => {
+      setConfirm(false);
+      await db.prefs.put({ key: 'weekOverride', value: { week: 1, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 } });
+      setDone(true);
+      setTimeout(() => setDone(false), 2000);
+    };
+    return (
+      <Card style={{ marginTop: 12 }}>
+        <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+          Reprendre semaine
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 10 }}>
+          Reviens à la semaine 1 du programme. Tes sets sont conservés. Utile pour reprendre après une coupure.
+        </div>
+        {confirm ? (
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-primary)', marginBottom: 10 }}>
+              Repartir à la Sem 1 ? Tes sets sont conservés.
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" onClick={() => setConfirm(false)}
+                style={{
+                  flex: 1, background: 'transparent', border: '1px solid var(--border-strong)',
+                  borderRadius: 10, color: 'var(--text-secondary)', padding: '10px 14px',
+                  fontSize: 12, fontWeight: 700, letterSpacing: '0.4px', textTransform: 'uppercase', cursor: 'pointer',
+                }}>ANNULER</button>
+              <button type="button" onClick={activate}
+                style={{
+                  flex: 1, background: 'var(--accent-royal)', border: 'none',
+                  borderRadius: 10, color: '#fff', padding: '10px 14px',
+                  fontSize: 12, fontWeight: 800, letterSpacing: '0.4px', textTransform: 'uppercase', cursor: 'pointer',
+                }}>CONFIRMER</button>
+            </div>
+          </div>
+        ) : (
+          <button type="button" onClick={() => setConfirm(true)}
+            style={{
+              background: 'transparent', border: '1px solid var(--border-strong)',
+              borderRadius: 10, color: 'var(--text-primary)',
+              padding: '8px 14px', fontSize: 12, fontWeight: 700,
+              letterSpacing: '0.4px', textTransform: 'uppercase', cursor: 'pointer',
+            }}>REPRENDRE SEM-1</button>
+        )}
+        {done && (
+          <div style={{ marginTop: 10, fontSize: 13, color: 'var(--accent-laurel)' }}>Reprise Sem 1 active</div>
+        )}
+      </Card>
+    );
+  };
+
   const ReglagesPage = () => {
     const [pingState, setPingState] = useState({ status: 'idle', msg: '' });
     const [bodyweight, setBodyweight] = useState('');
@@ -7356,6 +7467,7 @@
             }}>{resyncState.msg}</div>
           )}
         </Card>
+        <RepriseSemaineCard />
         <Card style={{ marginTop: 12 }}>
           <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
             Sons
