@@ -575,11 +575,6 @@
   };
 
   const ATTR_KEYS = ['sthenos', 'bia', 'ponos', 'metis', 'arete'];
-  const SEED_ATTRIBUTES = {
-    current: { sthenos: 0.62, bia: 0.58, ponos: 0.71, metis: 0.49, arete: 0.60 },
-    baseline: { sthenos: 0.30, bia: 0.30, ponos: 0.35, metis: 0.20, arete: 0.29 },
-  };
-  const SEED_VOLUME_DIST = { sthenos: 0.42, bia: 0.18, ponos: 0.28, metis: 0.08, arete: 0.04 };
   const DAY_LABELS = ['', 'LUN', 'MAR', 'MER', 'JEU', 'VEN', 'SAM', 'DIM'];
 
   // Mood tracking (SPEC §11 Étape 9) — 4 emojis post-session.
@@ -860,6 +855,10 @@
 
   db.version(3).stores({
     weekSuggestions: '[week+sessionDay+exerciseSlot]',
+  });
+
+  db.version(4).stores({
+    attributes: '++id, type, computedAt',
   });
 
   // Singleton de protection contre les seeds concurrents au boot.
@@ -1256,6 +1255,203 @@
       { id: 'arete',   label: 'Áreté',   value: attrs.arete },
     ];
   }
+
+  // ── Pentagon RPG Live ──────────────────────────────────────
+  function parseDurationMinutes(prescription) {
+    const p = (prescription || '');
+    const range = p.match(/(\d+)\s*[-–]\s*(\d+)\s*min/i);
+    if (range) return (parseInt(range[1], 10) + parseInt(range[2], 10)) / 2;
+    const single = p.match(/(\d+)\s*min/i);
+    if (single) return parseInt(single[1], 10);
+    return 0;
+  }
+
+  function getPrescribedRir(programmeRow) {
+    if (!programmeRow?.prescription) return null;
+    const p = programmeRow.prescription;
+    const rirRange = p.match(/RIR\s*(\d+)\s*[-–]\s*(\d+)/i);
+    if (rirRange) return (parseInt(rirRange[1], 10) + parseInt(rirRange[2], 10)) / 2;
+    const rir = p.match(/RIR\s*(\d+)/i);
+    if (rir) return parseInt(rir[1], 10);
+    const rpeRange = p.match(/RPE\s*(\d+)\s*[-–]\s*(\d+)/i);
+    if (rpeRange) return 10 - (parseInt(rpeRange[1], 10) + parseInt(rpeRange[2], 10)) / 2;
+    const rpe = p.match(/RPE\s*(\d+)/i);
+    if (rpe) return 10 - parseInt(rpe[1], 10);
+    return null;
+  }
+
+  async function computeAttributesLive(blockId) {
+    const [allSets, allProgramme, allOneRMs, bwPref, allUserConfigs] = await Promise.all([
+      db.sets.toArray(),
+      db.programme.toArray(),
+      db.oneRMs.toArray(),
+      db.prefs.get('bodyweight'),
+      db.userSessionConfigs.toArray(),
+    ]);
+    const bodyweight = bwPref?.value || 0;
+    const blockSets = allSets.filter(s => {
+      const w = s.week || 0;
+      const b = getCurrentBlock(w);
+      return b.id === blockId;
+    });
+    const blockProgramme = allProgramme.filter(p => p.block === blockId);
+
+    // ── Sthénos ──
+    const sthenosBreakdown = {};
+    const sthenosRatios = [];
+    for (const std of ATHX_STANDARDS.filter(s => s.kind === 'lift')) {
+      const declared = allOneRMs.filter(o => std.pattern.test(o.exerciseName || ''));
+      const declaredBest = declared.length ? Math.max(...declared.map(o => o.weight || o.e1RM || 0)) : 0;
+      const setsMatch = allSets.filter(s => std.pattern.test(s.exerciseName || '') && s.e1RM);
+      const setsBest = setsMatch.length ? Math.max(...setsMatch.map(s => s.e1RM)) : 0;
+      const record = Math.max(declaredBest, setsBest);
+      let ratio = 0;
+      if (record > 0 && bodyweight > 0) {
+        ratio = Math.min((record / bodyweight) / std.targetBW, 1.0);
+      }
+      sthenosRatios.push(ratio);
+      sthenosBreakdown[std.id] = { record, targetBW: std.targetBW, ratio };
+    }
+    const sthenos = sthenosRatios.length ? sthenosRatios.reduce((a, b) => a + b, 0) / sthenosRatios.length : 0;
+
+    // ── Bia ──
+    const biaSets = blockSets.filter(s => s.format === 'jump');
+    const biaUserBlocks = allUserConfigs.flatMap(uc => (uc.configuration?.blocks || []))
+      .filter(b => b.type === 'plyo' || b.type === 'sprint');
+    const biaCurrentCount = biaSets.length + biaUserBlocks.reduce((sum, b) => sum + (b.sets?.length || 0), 0);
+    const prescribedJumpSlots = blockProgramme.filter(p => p.format === 'jump');
+    const prescribedSetsPerJumpSlot = 5;
+    const biaPrescribedCount = prescribedJumpSlots.length * prescribedSetsPerJumpSlot;
+    const bia = biaPrescribedCount > 0 ? Math.min(biaCurrentCount / biaPrescribedCount, 1.0) : 0;
+
+    // ── Pónos ──
+    const ponosFormats = new Set(['emom', 'density', 'softAmrap']);
+    const ponosSets = blockSets.filter(s => ponosFormats.has(s.format) && s.durationMinutes);
+    const currentMinutesFromSets = ponosSets.reduce((a, s) => a + s.durationMinutes, 0);
+    const ponosUserBlocks = allUserConfigs.flatMap(uc => (uc.configuration?.blocks || []))
+      .filter(b => b.type === 'aerobic' || b.type === 'anaerobic' || b.type === 'iso');
+    const currentMinutesFromUd = ponosUserBlocks.reduce((a, b) => a + (b.durationMinutes || b.durationMinutesTarget || 0), 0);
+    const currentMinutes = currentMinutesFromSets + currentMinutesFromUd;
+    const ponosPrescribedSlots = blockProgramme.filter(p => ponosFormats.has(p.format));
+    const prescribedMinutes = ponosPrescribedSlots.reduce((a, p) => a + parseDurationMinutes(p.prescription), 0);
+    const ponos = prescribedMinutes > 0 ? Math.min(currentMinutes / prescribedMinutes, 1.0) : 0;
+
+    // ── Mètis ──
+    const programmeBySlot = {};
+    for (const p of blockProgramme) {
+      const key = `${p.week}_${p.sessionDay}_${p.exerciseSlot}`;
+      programmeBySlot[key] = p;
+    }
+    const eligibleSets = blockSets.filter(s => {
+      if (s.rir === null || s.rir === undefined) return false;
+      const key = `${s.week}_${s.sessionDay}_${s.exerciseSlot}`;
+      const prog = programmeBySlot[key];
+      return getPrescribedRir(prog) !== null;
+    });
+    const inWindow = eligibleSets.filter(s => {
+      const key = `${s.week}_${s.sessionDay}_${s.exerciseSlot}`;
+      const prescribed = getPrescribedRir(programmeBySlot[key]);
+      return Math.abs(s.rir - prescribed) <= 1;
+    });
+    const metis = eligibleSets.length > 0 ? inWindow.length / eligibleSets.length : 0.5;
+
+    // ── Áreté ──
+    const plannedSessions = new Set();
+    const strengthFormats = new Set(['traditional', 'doubleProg', 'topBackoff', 'softAmrap', 'amrap', 'density', 'emom', 'jump']);
+    for (const p of blockProgramme) {
+      if (strengthFormats.has(p.format)) plannedSessions.add(`${p.week}_${p.sessionDay}`);
+    }
+    const doneSessions = new Set();
+    for (const s of blockSets) {
+      doneSessions.add(`${s.week}_${s.sessionDay}`);
+    }
+    const sessionsPlanned = plannedSessions.size;
+    const sessionsDone = [...doneSessions].filter(k => plannedSessions.has(k)).length;
+    const assiduity = sessionsPlanned > 0 ? Math.min(sessionsDone / sessionsPlanned, 1.0) : 0;
+
+    const arete = 0.30 * sthenos + 0.15 * bia + 0.25 * ponos + 0.15 * metis + 0.15 * assiduity;
+
+    return {
+      sthenos, bia, ponos, metis, arete,
+      breakdown: {
+        sthenos: { ratios: sthenosBreakdown, mean: sthenos },
+        bia: { current_count: biaCurrentCount, prescribed_count: biaPrescribedCount, fraction: bia },
+        ponos: { current_minutes: currentMinutes, prescribed_minutes: prescribedMinutes, fraction: ponos },
+        metis: { in_window: inWindow.length, total_with_prescribed: eligibleSets.length, fraction: metis },
+        arete: { components: { sthenos: 0.30, bia: 0.15, ponos: 0.25, metis: 0.15, assiduity: 0.15 }, assiduity },
+      },
+    };
+  }
+
+  async function computeBaselineAttributes() {
+    const [allOneRMs, bwPref] = await Promise.all([
+      db.oneRMs.toArray(),
+      db.prefs.get('bodyweight'),
+    ]);
+    const bodyweight = bwPref?.value || 0;
+    const sthenosBreakdown = {};
+    const sthenosRatios = [];
+    for (const std of ATHX_STANDARDS.filter(s => s.kind === 'lift')) {
+      const declared = allOneRMs.filter(o => std.pattern.test(o.exerciseName || ''));
+      const declaredBest = declared.length ? Math.max(...declared.map(o => o.weight || o.e1RM || 0)) : 0;
+      let ratio = 0;
+      if (declaredBest > 0 && bodyweight > 0) {
+        ratio = Math.min((declaredBest / bodyweight) / std.targetBW, 1.0);
+      }
+      sthenosRatios.push(ratio);
+      sthenosBreakdown[std.id] = { record: declaredBest, targetBW: std.targetBW, ratio };
+    }
+    const sthenos = sthenosRatios.length ? sthenosRatios.reduce((a, b) => a + b, 0) / sthenosRatios.length : 0;
+    const arete = 0.30 * sthenos + 0.15 * 0 + 0.25 * 0 + 0.15 * 0.5 + 0.15 * 0;
+    return {
+      sthenos, bia: 0, ponos: 0, metis: 0.5, arete,
+      breakdown: {
+        sthenos: { ratios: sthenosBreakdown, mean: sthenos },
+        bia: { current_count: 0, prescribed_count: 0, fraction: 0 },
+        ponos: { current_minutes: 0, prescribed_minutes: 0, fraction: 0 },
+        metis: { in_window: 0, total_with_prescribed: 0, fraction: 0.5 },
+        arete: { components: { sthenos: 0.30, bia: 0.15, ponos: 0.25, metis: 0.15, assiduity: 0.15 }, assiduity: 0 },
+      },
+    };
+  }
+
+  const useAttributes = (refreshKey = 0) => {
+    const [attrs, setAttrs] = useState(null);
+    useEffect(() => {
+      let alive = true;
+      (async () => {
+        const week = getCurrentWeek();
+        const blockId = getCurrentBlock(week).id;
+        let baseline = await db.attributes.where('type').equals('baseline').first();
+        if (!baseline) {
+          const oneRMs = await db.oneRMs.toArray();
+          if (oneRMs.length > 0) {
+            const baseVals = await computeBaselineAttributes();
+            const row = { type: 'baseline', ...baseVals, computedAt: new Date().toISOString() };
+            const id = await db.attributes.add(row);
+            baseline = { ...row, id };
+          }
+        }
+        const currentVals = await computeAttributesLive(blockId);
+        const currentRow = { type: 'current', ...currentVals, computedAt: new Date().toISOString() };
+        const existingCurrent = await db.attributes.where('type').equals('current').first();
+        if (existingCurrent) {
+          await db.attributes.update(existingCurrent.id, currentRow);
+        } else {
+          await db.attributes.add(currentRow);
+        }
+        if (alive) {
+          setAttrs({
+            current: currentVals,
+            baseline: baseline || { sthenos: 0, bia: 0, ponos: 0, metis: 0.5, arete: 0, breakdown: null },
+            breakdown: currentVals.breakdown,
+          });
+        }
+      })();
+      return () => { alive = false; };
+    }, [refreshKey]);
+    return attrs;
+  };
 
   async function computeHeroStats() {
     const [allSets, sessions, bwPref, currentWeek] = await Promise.all([
@@ -5875,6 +6071,7 @@
     const todayIdx = getCurrentWeekDayIdx();
     const navigate = useNavigate();
     const weekStats = useWeekStats(week);
+    const semaineAttrs = useAttributes(0);
 
     // Build training days from WEEK_DAYS + real programme data
     const trainingDays = WEEK_DAYS.filter(d => (d.strength || d.userDefined) && d.sessionDay).map(d => {
@@ -6051,7 +6248,7 @@
           <div style={{ display: 'flex', gap: 'var(--sp-3)' }}>
             {ATTR_KEYS.map(k => {
               const info = ATTRIBUTES_INFO[k];
-              const pct = SEED_VOLUME_DIST[k] || 0;
+              const pct = semaineAttrs ? semaineAttrs.current[k] : 0;
               return (
                 <div key={k} style={{ flex: 1, textAlign: 'center' }}>
                   <div style={{ fontFamily: 'var(--font-greek)', fontStyle: 'italic', fontSize: 16, color: info.color, marginBottom: 4 }}>
@@ -6778,9 +6975,9 @@
     const [bodyweight, setBodyweight] = useState(0);
     useEffect(() => { db.prefs.get('bodyweight').then(r => setBodyweight(r?.value || 0)); }, []);
 
-    // Use live data if available, fallback to seed
-    const currentVals = ATTR_KEYS.map(k => SEED_ATTRIBUTES.current[k]);
-    const baselineVals = ATTR_KEYS.map(k => SEED_ATTRIBUTES.baseline[k]);
+    const liveAttrs = useAttributes(refresh);
+    const currentVals = ATTR_KEYS.map(k => liveAttrs ? liveAttrs.current[k] : 0);
+    const baselineVals = ATTR_KEYS.map(k => liveAttrs ? liveAttrs.baseline[k] : 0);
 
     return (
       <div style={{ padding: '0 var(--sp-4) var(--sp-6)', animation: 'fade-in var(--d-base) var(--ease-out)' }}>
@@ -6809,10 +7006,11 @@
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)' }}>
           {ATTR_KEYS.map(k => {
             const info = ATTRIBUTES_INFO[k];
-            const val = SEED_ATTRIBUTES.current[k];
-            const base = SEED_ATTRIBUTES.baseline[k];
+            const val = liveAttrs ? liveAttrs.current[k] : 0;
+            const base = liveAttrs ? liveAttrs.baseline[k] : 0;
             const delta = val - base;
             const isOpen = openAttr === k;
+            const bd = liveAttrs?.breakdown?.[k];
             return (
               <div key={k} className="ody-tablet" style={{ padding: 0, overflow: 'hidden' }}>
                 <button
@@ -6854,13 +7052,13 @@
                     </div>
                     <span style={{
                       fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700,
-                      color: delta > 0 ? 'var(--accent-laurel)' : 'var(--text-tertiary)',
+                      color: delta > 0 ? 'var(--accent-laurel)' : delta < 0 ? 'var(--accent-blood)' : 'var(--text-tertiary)',
                     }}>
-                      {delta > 0 ? '+' : ''}{Math.round(delta * 100)}
+                      {delta > 0 ? '+' : ''}{Math.round(delta * 100)}pts
                     </span>
                   </div>
                 </button>
-                {/* Expandable info panel */}
+                {/* Expandable info panel with breakdown */}
                 {isOpen && (
                   <div style={{
                     padding: 'var(--sp-3) var(--sp-4) var(--sp-4)',
@@ -6881,6 +7079,36 @@
                     }}>
                       {info.formula}
                     </div>
+                    {bd && k === 'sthenos' && bd.ratios && (
+                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.8, marginBottom: 'var(--sp-2)', fontFamily: 'var(--font-mono)' }}>
+                        {Object.entries(bd.ratios).map(([id, r]) => {
+                          const std = ATHX_STANDARDS.find(s => s.id === id);
+                          return (
+                            <div key={id}>{std?.name || id} · {r.record ? r.record.toFixed(1) : '—'}kg · {bodyweight ? (r.record / bodyweight).toFixed(2) : '—'}/{r.targetBW.toFixed(1)}xBW · {Math.round(r.ratio * 100)}%</div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {bd && k === 'bia' && (
+                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.8, marginBottom: 'var(--sp-2)', fontFamily: 'var(--font-mono)' }}>
+                        {bd.current_count} sets validés / {bd.prescribed_count} prescrits
+                      </div>
+                    )}
+                    {bd && k === 'ponos' && (
+                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.8, marginBottom: 'var(--sp-2)', fontFamily: 'var(--font-mono)' }}>
+                        {Math.round(bd.current_minutes)} min / {Math.round(bd.prescribed_minutes)} min prescrits
+                      </div>
+                    )}
+                    {bd && k === 'metis' && (
+                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.8, marginBottom: 'var(--sp-2)', fontFamily: 'var(--font-mono)' }}>
+                        {bd.in_window} sets RIR ok / {bd.total_with_prescribed} sets RIR prescrits
+                      </div>
+                    )}
+                    {bd && k === 'arete' && (
+                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.8, marginBottom: 'var(--sp-2)', fontFamily: 'var(--font-mono)' }}>
+                        30% Sthénos + 15% Bia + 25% Pónos + 15% Mètis + 15% Assiduité ({Math.round(bd.assiduity * 100)}%)
+                      </div>
+                    )}
                     <div style={{
                       fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5,
                     }}>
