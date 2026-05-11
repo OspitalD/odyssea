@@ -883,6 +883,11 @@
     prs: '++id, liftKey, week, block, validatedAt',
   });
 
+  db.version(6).stores({
+    notes: '++id, setId, sessionRef, week, sessionDay, createdAt',
+    journals: '++id, sessionRef, week, sessionDay, createdAt',
+  });
+
   // Singleton de protection contre les seeds concurrents au boot.
   let seedInFlight = null;
 
@@ -2040,6 +2045,85 @@
     const target = bodyweight ? Math.round(bodyweight * targetRatio * 10) / 10 : null;
     const ratio = (bodyweight && current) ? Math.round((current / bodyweight) * 100) / 100 : null;
     return { current, target, ratio, targetRatio };
+  };
+
+  /* ==========================================================
+     JOURNAL HOOKS
+     ========================================================== */
+  const buildSessionRef = (week, sessionDay) => `W${String(week).padStart(2,'0')}-${sessionDay}`;
+
+  const useNotesForSet = (setId) => {
+    const [notes, setNotes] = useState([]);
+    useEffect(() => {
+      if (!setId) return;
+      let alive = true;
+      db.notes.where('setId').equals(setId).toArray().then(rows => {
+        if (alive) setNotes(rows);
+      });
+      return () => { alive = false; };
+    }, [setId]);
+    return notes;
+  };
+
+  const useNotesForSession = (sessionRef) => {
+    const [notes, setNotes] = useState([]);
+    useEffect(() => {
+      if (!sessionRef) return;
+      let alive = true;
+      db.notes.where('sessionRef').equals(sessionRef).toArray().then(rows => {
+        if (alive) setNotes(rows.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || '')));
+      });
+      return () => { alive = false; };
+    }, [sessionRef]);
+    return notes;
+  };
+
+  const useJournalForSession = (sessionRef) => {
+    const [journal, setJournal] = useState(null);
+    useEffect(() => {
+      if (!sessionRef) return;
+      let alive = true;
+      db.journals.where('sessionRef').equals(sessionRef).first().then(row => {
+        if (alive) setJournal(row || null);
+      });
+      return () => { alive = false; };
+    }, [sessionRef]);
+    return journal;
+  };
+
+  const useAllNotesAndJournals = (refreshKey = 0) => {
+    const [data, setData] = useState({ notes: [], journals: [] });
+    useEffect(() => {
+      let alive = true;
+      Promise.all([db.notes.toArray(), db.journals.toArray()]).then(([notes, journals]) => {
+        if (!alive) return;
+        setData({
+          notes: notes.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')),
+          journals: journals.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')),
+        });
+      });
+      return () => { alive = false; };
+    }, [refreshKey]);
+    return data;
+  };
+
+  const useTagSuggestions = (query) => {
+    const [tags, setTags] = useState([]);
+    useEffect(() => {
+      let alive = true;
+      Promise.all([db.notes.toArray(), db.journals.toArray()]).then(([notes, journals]) => {
+        if (!alive) return;
+        const allTags = new Set();
+        for (const n of notes) { (n.tags || []).forEach(t => allTags.add(t)); }
+        for (const j of journals) { (j.tags || []).forEach(t => allTags.add(t)); }
+        const arr = [...allTags].sort();
+        if (!query) { setTags(arr); return; }
+        const q = query.toLowerCase();
+        setTags(arr.filter(t => t.toLowerCase().includes(q)));
+      });
+      return () => { alive = false; };
+    }, [query]);
+    return tags;
   };
 
   /* ==========================================================
@@ -3666,6 +3750,313 @@
      - /stats      → Jeu/Ven : e1RM par exo + delta + (badges N3)
      - /reglages   → Ven : ATHX date, sons, reset, export
      ========================================================== */
+  /* ==========================================================
+     JOURNAL COMPONENTS — TagPicker, NoteInput, SessionJournal
+     ========================================================== */
+  const TagPicker = ({ tags, onChange, placeholder = 'Ajouter un tag...' }) => {
+    const [input, setInput] = useState('');
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const suggestions = useTagSuggestions(input);
+    const filtered = suggestions.filter(t => !tags.includes(t));
+
+    const addTag = (tag) => {
+      const t = tag.trim().toLowerCase().replace(/\s+/g, '-');
+      if (t && !tags.includes(t)) onChange([...tags, t]);
+      setInput('');
+      setShowSuggestions(false);
+    };
+
+    const removeTag = (tag) => onChange(tags.filter(t => t !== tag));
+
+    return (
+      <div>
+        {tags.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+            {tags.map(tag => (
+              <span key={tag} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                background: 'var(--bg-primary)', border: '1px solid var(--border-strong)',
+                borderRadius: 4, padding: '3px 8px', fontSize: 11, fontWeight: 600,
+                color: 'var(--text-secondary)',
+              }}>
+                #{tag}
+                <button type="button" onClick={() => removeTag(tag)} style={{
+                  background: 'none', border: 'none', color: 'var(--text-tertiary)',
+                  cursor: 'pointer', padding: 0, fontSize: 13, lineHeight: 1,
+                }}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div style={{ position: 'relative' }}>
+          <input
+            type="text" value={input}
+            onChange={e => { setInput(e.target.value); setShowSuggestions(true); }}
+            onFocus={() => setShowSuggestions(true)}
+            onKeyDown={e => { if (e.key === 'Enter' && input.trim()) { e.preventDefault(); addTag(input); } }}
+            placeholder={placeholder}
+            style={{
+              width: '100%', background: 'var(--bg-primary)', border: '1px solid var(--border-strong)',
+              borderRadius: 8, color: 'var(--text-primary)', padding: '8px 12px', fontSize: 13, outline: 'none',
+            }}
+          />
+          {showSuggestions && input.length > 0 && filtered.length > 0 && (
+            <div style={{
+              position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
+              background: 'var(--bg-surface)', border: '1px solid var(--border-strong)',
+              borderRadius: 8, marginTop: 4, maxHeight: 120, overflow: 'auto',
+            }}>
+              {filtered.slice(0, 6).map(tag => (
+                <button key={tag} type="button" onClick={() => addTag(tag)} style={{
+                  width: '100%', background: 'transparent', border: 'none', textAlign: 'left',
+                  padding: '8px 12px', fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer',
+                }}>#{tag}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const NoteInput = ({ setId, sessionRef, week, sessionDay, block, exerciseName, onClose }) => {
+    const [text, setText] = useState('');
+    const [tags, setTags] = useState([]);
+    const [existingNote, setExistingNote] = useState(null);
+
+    useEffect(() => {
+      if (!setId) return;
+      db.notes.where('setId').equals(setId).first().then(n => {
+        if (n) { setExistingNote(n); setText(n.text || ''); setTags(n.tags || []); }
+      });
+    }, [setId]);
+
+    const save = async () => {
+      const data = {
+        setId, sessionRef, week, sessionDay, block,
+        exerciseName, text: text.trim(), tags,
+        createdAt: new Date().toISOString(),
+      };
+      if (existingNote) await db.notes.update(existingNote.id, data);
+      else await db.notes.add(data);
+      onClose();
+    };
+
+    const remove = async () => {
+      if (existingNote) await db.notes.delete(existingNote.id);
+      onClose();
+    };
+
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 200,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'var(--sp-4)',
+      }} onClick={onClose}>
+        <div style={{
+          background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--r-lg)', padding: 'var(--sp-4)', width: '100%', maxWidth: 380,
+        }} onClick={e => e.stopPropagation()}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 12 }}>
+            Note · {exerciseName}
+          </div>
+          <textarea
+            value={text} onChange={e => setText(e.target.value)}
+            placeholder="Ressenti, douleur, technique..."
+            autoFocus
+            rows={3}
+            style={{
+              width: '100%', background: 'var(--bg-surface)', border: '1px solid var(--border-strong)',
+              borderRadius: 8, color: 'var(--text-primary)', padding: '10px 12px', fontSize: 13,
+              resize: 'vertical', outline: 'none', marginBottom: 10,
+            }}
+          />
+          <TagPicker tags={tags} onChange={setTags} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+            {existingNote && (
+              <button type="button" onClick={remove} style={{
+                flex: 1, background: 'transparent', border: '1px solid var(--accent-blood)',
+                borderRadius: 8, color: 'var(--accent-blood)', padding: '12px', fontSize: 11,
+                fontWeight: 700, letterSpacing: '0.8px', textTransform: 'uppercase', cursor: 'pointer',
+              }}>Supprimer</button>
+            )}
+            <button type="button" onClick={onClose} style={{
+              flex: 1, background: 'transparent', border: '1px solid var(--border-strong)',
+              borderRadius: 8, color: 'var(--text-secondary)', padding: '12px', fontSize: 11,
+              fontWeight: 700, letterSpacing: '0.8px', textTransform: 'uppercase', cursor: 'pointer',
+            }}>Annuler</button>
+            <button type="button" onClick={save} disabled={!text.trim()} style={{
+              flex: 1, background: text.trim() ? 'var(--accent-laurel)' : 'var(--bg-surface-hover)',
+              border: 'none', borderRadius: 8,
+              color: text.trim() ? '#0D0F0E' : 'var(--text-tertiary)', padding: '12px', fontSize: 11,
+              fontWeight: 800, letterSpacing: '0.8px', textTransform: 'uppercase',
+              cursor: text.trim() ? 'pointer' : 'not-allowed',
+            }}>Enregistrer</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const SessionJournal = ({ sessionRef, week, sessionDay, block, onSave, onSkip }) => {
+    const [mood, setMood] = useState(null);
+    const [fatigue, setFatigue] = useState(5);
+    const [sleepHours, setSleepHours] = useState('');
+    const [technique, setTechnique] = useState(7);
+    const [expanded, setExpanded] = useState(false);
+    const [nutrition, setNutrition] = useState('');
+    const [whatWorked, setWhatWorked] = useState('');
+    const [whatFrotted, setWhatFrotted] = useState('');
+    const [notes, setNotes] = useState('');
+    const [tags, setTags] = useState([]);
+    const [existing, setExisting] = useState(null);
+
+    useEffect(() => {
+      if (!sessionRef) return;
+      db.journals.where('sessionRef').equals(sessionRef).first().then(j => {
+        if (j) {
+          setExisting(j);
+          setMood(j.mood || null);
+          setFatigue(j.fatiguePerceived || 5);
+          setSleepHours(j.sleepHours != null ? String(j.sleepHours) : '');
+          setTechnique(j.technicalQuality || 7);
+          setNutrition(j.nutrition || '');
+          setWhatWorked(j.whatWorked || '');
+          setWhatFrotted(j.whatFrotted || '');
+          setNotes(j.notes || '');
+          setTags(j.tags || []);
+          if (j.nutrition || j.whatWorked || j.whatFrotted || j.notes) setExpanded(true);
+        }
+      });
+    }, [sessionRef]);
+
+    const save = async () => {
+      const data = {
+        sessionRef, week, sessionDay, block,
+        mood, fatiguePerceived: fatigue,
+        sleepHours: sleepHours ? parseFloat(sleepHours) : null,
+        technicalQuality: technique,
+        nutrition: nutrition.trim() || null,
+        whatWorked: whatWorked.trim() || '',
+        whatFrotted: whatFrotted.trim() || '',
+        notes: notes.trim() || '',
+        tags,
+        createdAt: new Date().toISOString(),
+      };
+      if (existing) await db.journals.update(existing.id, data);
+      else await db.journals.add(data);
+      if (onSave) onSave();
+    };
+
+    const sliderStyle = { width: '100%', accentColor: 'var(--accent-laurel)' };
+
+    return (
+      <div style={{
+        background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+        borderRadius: 14, padding: 16, marginBottom: 'var(--sp-4)',
+      }}>
+        <div style={{
+          fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase',
+          color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', marginBottom: 14,
+        }}>JOURNAL DE SÉANCE</div>
+
+        {/* Mood */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 6 }}>MOOD</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {MOOD_OPTIONS.map(m => (
+              <button key={m.id} type="button" onClick={() => setMood(m.id)} style={{
+                flex: 1, minHeight: 44, fontSize: 20, background: mood === m.id ? 'var(--bg-primary)' : 'transparent',
+                border: `1px solid ${mood === m.id ? 'var(--accent-laurel)' : 'var(--border-strong)'}`,
+                borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>{m.emoji}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Fatigue */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>FATIGUE</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>{fatigue}/10</span>
+          </div>
+          <input type="range" min={1} max={10} value={fatigue} onChange={e => setFatigue(+e.target.value)} style={sliderStyle} />
+        </div>
+
+        {/* Sommeil */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 6 }}>SOMMEIL</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input type="number" inputMode="decimal" step="0.5" value={sleepHours}
+              onChange={e => setSleepHours(e.target.value)} placeholder="7.5"
+              style={{
+                width: 70, background: 'var(--bg-primary)', border: '1px solid var(--border-strong)',
+                borderRadius: 8, color: 'var(--text-primary)', padding: '8px 10px', fontSize: 14, outline: 'none',
+              }} />
+            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>heures</span>
+          </div>
+        </div>
+
+        {/* Technique */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>TECHNIQUE</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>{technique}/10</span>
+          </div>
+          <input type="range" min={1} max={10} value={technique} onChange={e => setTechnique(+e.target.value)} style={sliderStyle} />
+        </div>
+
+        {/* Expand */}
+        <button type="button" onClick={() => setExpanded(!expanded)} style={{
+          width: '100%', background: 'transparent', border: 'none', color: 'var(--text-secondary)',
+          fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: '6px 0', textAlign: 'left',
+          letterSpacing: '0.5px',
+        }}>{expanded ? '▴' : '▾'} Plus de détails (optionnel)</button>
+
+        {expanded && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 4 }}>NUTRITION</div>
+              <input type="text" value={nutrition} onChange={e => setNutrition(e.target.value)} placeholder="Pré-workout, repas, hydratation..."
+                style={{ width: '100%', background: 'var(--bg-primary)', border: '1px solid var(--border-strong)', borderRadius: 8, color: 'var(--text-primary)', padding: '8px 12px', fontSize: 13, outline: 'none' }} />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 4 }}>QU'EST-CE QUI A MARCHÉ</div>
+              <textarea value={whatWorked} onChange={e => setWhatWorked(e.target.value)} rows={2} placeholder="Warmup, transitions, cues..."
+                style={{ width: '100%', background: 'var(--bg-primary)', border: '1px solid var(--border-strong)', borderRadius: 8, color: 'var(--text-primary)', padding: '8px 12px', fontSize: 13, resize: 'vertical', outline: 'none' }} />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 4 }}>QU'EST-CE QUI A FROTTÉ</div>
+              <textarea value={whatFrotted} onChange={e => setWhatFrotted(e.target.value)} rows={2} placeholder="Points durs, douleurs, frustrations..."
+                style={{ width: '100%', background: 'var(--bg-primary)', border: '1px solid var(--border-strong)', borderRadius: 8, color: 'var(--text-primary)', padding: '8px 12px', fontSize: 13, resize: 'vertical', outline: 'none' }} />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 4 }}>NOTES</div>
+              <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Autre..."
+                style={{ width: '100%', background: 'var(--bg-primary)', border: '1px solid var(--border-strong)', borderRadius: 8, color: 'var(--text-primary)', padding: '8px 12px', fontSize: 13, resize: 'vertical', outline: 'none' }} />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 6 }}>TAGS</div>
+              <TagPicker tags={tags} onChange={setTags} />
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+          <button type="button" onClick={onSkip} style={{
+            flex: 1, background: 'transparent', border: '1px solid var(--border-strong)',
+            borderRadius: 8, color: 'var(--text-secondary)', padding: '14px', fontSize: 11,
+            fontWeight: 700, letterSpacing: '0.8px', textTransform: 'uppercase', cursor: 'pointer',
+          }}>Sauter</button>
+          <button type="button" onClick={save} style={{
+            flex: 1, background: 'var(--accent-laurel)', border: 'none',
+            borderRadius: 8, color: '#0D0F0E', padding: '14px', fontSize: 11,
+            fontWeight: 800, letterSpacing: '0.8px', textTransform: 'uppercase', cursor: 'pointer',
+          }}>Enregistrer</button>
+        </div>
+      </div>
+    );
+  };
+
   // ExoCard : 1 carte par exo, accordéon, saisie set complète.
   const ExoCard = ({ ex, week, sessionDay, sets, isOpen, onToggle, onSetValidated, onBadgesUnlocked }) => {
     const lastSet = sets && sets.length ? sets[sets.length - 1] : null;
@@ -3842,6 +4233,9 @@
       onSetValidated();
     };
 
+    const [noteModalSetId, setNoteModalSetId] = useState(null);
+    const sessionRef = buildSessionRef(week, sessionDay);
+
     const renderSetBadge = (s) => {
       const sFmt = FORMAT_META[s.format] || FORMAT_META.traditional;
       if (s.format === 'jump') {
@@ -3890,6 +4284,9 @@
           <span style={{ flex: 1 }} />
           {s.isPR && <span style={{ color: 'var(--accent-olympus)', fontSize: 13, fontWeight: 800 }} title="PR — nouvel e1RM record">★</span>}
           {s.e1RM && <span style={{ color: s.isPR ? 'var(--accent-olympus)' : 'var(--accent-laurel)', fontSize: 11, fontWeight: 700 }}>e1RM {s.e1RM}</span>}
+          <button type="button" onClick={(e) => { e.stopPropagation(); setNoteModalSetId(s.id); }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', fontSize: 12, color: 'var(--text-tertiary)', minHeight: 'auto' }}
+            title="Note">✎</button>
         </li>
       );
     };
@@ -4377,6 +4774,17 @@
         )}
       </Card>
       {prOverlay && <PROverlay prDetails={prOverlay} onDone={() => setPrOverlay(null)} />}
+      {noteModalSetId != null && (
+        <NoteInput
+          setId={noteModalSetId}
+          sessionRef={sessionRef}
+          week={week}
+          sessionDay={sessionDay}
+          block={getCurrentBlock(week).id}
+          exerciseName={ex.exerciseName}
+          onClose={() => setNoteModalSetId(null)}
+        />
+      )}
     </>
     );
   };
@@ -5137,6 +5545,7 @@
     const [endPhrase, setEndPhrase] = useState(null);
     const [endingSessionId, setEndingSessionId] = useState(null);
     const [recapStats, setRecapStats] = useState(null);
+    const [udJournalDone, setUdJournalDone] = useState(false);
 
     const refreshSessionSets = useCallback(async () => {
       const all = await db.sets.where('week').equals(week).toArray();
@@ -5605,6 +6014,17 @@
               </div>
             )}
 
+            {!udJournalDone && (
+              <SessionJournal
+                sessionRef={buildSessionRef(week, sessionDay)}
+                week={week}
+                sessionDay={sessionDay}
+                block={block.id}
+                onSave={() => setUdJournalDone(true)}
+                onSkip={() => setUdJournalDone(true)}
+              />
+            )}
+
             <button type="button" onClick={enterConfig}
               style={{
                 width: '100%', minHeight: 56, marginBottom: 10,
@@ -5687,6 +6107,7 @@
     // Détection : session déjà terminée par le passé sur ce jour ?
     const [sessionCompleted, setSessionCompleted] = useState(false);
     const [strengthRecap, setStrengthRecap] = useState(null);
+    const [journalDone, setJournalDone] = useState(false);
 
     useEffect(() => {
       const shell = document.querySelector('.app-shell');
@@ -5939,6 +6360,17 @@
               </div>
             )}
           </div>
+
+          {!journalDone && (
+            <SessionJournal
+              sessionRef={buildSessionRef(week, day.sessionDay)}
+              week={week}
+              sessionDay={day.sessionDay}
+              block={getCurrentBlock(week).id}
+              onSave={() => setJournalDone(true)}
+              onSkip={() => setJournalDone(true)}
+            />
+          )}
 
           {strengthRecap.sessionPRs && strengthRecap.sessionPRs.length > 0 && (
             <div style={{ marginBottom: 'var(--sp-4)' }}>
@@ -7624,6 +8056,11 @@
     const [goalDrill, setGoalDrill] = useState(null);
     const [liftToggles, setLiftToggles] = useState({ squat: true, deadlift: true, bench: true, ohp: true, row: true });
     const [showAllPRs, setShowAllPRs] = useState(false);
+    const [journalRefresh, setJournalRefresh] = useState(0);
+    const [journalSearch, setJournalSearch] = useState('');
+    const [journalTagFilter, setJournalTagFilter] = useState([]);
+    const [journalMoodFilter, setJournalMoodFilter] = useState(null);
+    const journalData = useAllNotesAndJournals(journalRefresh);
 
     if (!data) return (
       <div style={{ padding: 'var(--sp-5) var(--sp-4)', textAlign: 'center', color: 'var(--text-tertiary)' }}>
@@ -8318,6 +8755,181 @@
                 </div>
               )}
             </StatCard>
+          );
+        })()}
+
+        {/* ═══════ SECTION 8 — JOURNAL ═══════ */}
+        <SectionHeader>JOURNAL</SectionHeader>
+
+        {(() => {
+          const { notes, journals } = journalData;
+          const allEntries = [];
+          const sessionRefs = new Set();
+          for (const j of journals) sessionRefs.add(j.sessionRef);
+          for (const n of notes) sessionRefs.add(n.sessionRef);
+
+          for (const ref of sessionRefs) {
+            const sessionNotes = notes.filter(n => n.sessionRef === ref);
+            const sessionJournal = journals.find(j => j.sessionRef === ref);
+            const week = sessionJournal?.week || sessionNotes[0]?.week || 0;
+            const sessionDay = sessionJournal?.sessionDay || sessionNotes[0]?.sessionDay || '';
+            const createdAt = sessionJournal?.createdAt || sessionNotes[0]?.createdAt || '';
+            allEntries.push({ ref, week, sessionDay, createdAt, notes: sessionNotes, journal: sessionJournal });
+          }
+          allEntries.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+          const searchLower = journalSearch.toLowerCase().trim();
+          const filtered = allEntries.filter(entry => {
+            if (journalMoodFilter && entry.journal?.mood !== journalMoodFilter) return false;
+            if (journalTagFilter.length > 0) {
+              const entryTags = [
+                ...(entry.journal?.tags || []),
+                ...entry.notes.flatMap(n => n.tags || []),
+              ];
+              if (!journalTagFilter.every(t => entryTags.includes(t))) return false;
+            }
+            if (searchLower) {
+              const haystack = [
+                ...entry.notes.map(n => n.text),
+                entry.journal?.whatWorked, entry.journal?.whatFrotted,
+                entry.journal?.nutrition, entry.journal?.notes,
+                ...entry.notes.flatMap(n => n.tags || []),
+                ...(entry.journal?.tags || []),
+              ].filter(Boolean).join(' ').toLowerCase();
+              const words = searchLower.split(/\s+/);
+              if (!words.every(w => haystack.includes(w))) return false;
+            }
+            return true;
+          });
+
+          const allTags = new Set();
+          for (const e of allEntries) {
+            (e.journal?.tags || []).forEach(t => allTags.add(t));
+            e.notes.forEach(n => (n.tags || []).forEach(t => allTags.add(t)));
+          }
+
+          if (allEntries.length === 0) {
+            return (
+              <StatCard style={{ padding: 'var(--sp-4)' }}>
+                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', fontStyle: 'italic', fontFamily: 'var(--font-greek)' }}>
+                  Pas encore de journal. Ajoute des notes pendant tes séances pour bâtir ton historique.
+                </div>
+              </StatCard>
+            );
+          }
+
+          const moodEmoji = (id) => MOOD_OPTIONS.find(m => m.id === id)?.emoji || '';
+          const dayFr = (sd) => WEEK_DAYS.find(d => d.sessionDay === sd)?.fr || sd;
+          const dayLabel = (sd) => WEEK_DAYS.find(d => d.sessionDay === sd)?.label || '';
+
+          return (
+            <div>
+              {/* Search */}
+              <div style={{ marginBottom: 'var(--sp-3)' }}>
+                <input type="text" value={journalSearch} onChange={e => setJournalSearch(e.target.value)}
+                  placeholder="Rechercher..."
+                  style={{
+                    width: '100%', background: 'var(--bg-surface)', border: '1px solid var(--border-strong)',
+                    borderRadius: 8, color: 'var(--text-primary)', padding: '10px 12px 10px 32px', fontSize: 13, outline: 'none',
+                    backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%234A4D4B' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='M21 21l-4.35-4.35'/%3E%3C/svg%3E")`,
+                    backgroundRepeat: 'no-repeat', backgroundPosition: '10px center',
+                  }}
+                />
+              </div>
+
+              {/* Filters */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 'var(--sp-3)' }}>
+                {[...allTags].slice(0, 8).map(tag => (
+                  <button key={tag} type="button" onClick={() => {
+                    setJournalTagFilter(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]);
+                  }} style={{
+                    background: journalTagFilter.includes(tag) ? 'var(--accent-laurel)' : 'transparent',
+                    border: `1px solid ${journalTagFilter.includes(tag) ? 'var(--accent-laurel)' : 'var(--border-strong)'}`,
+                    borderRadius: 4, padding: '3px 8px', fontSize: 10, fontWeight: 600, cursor: 'pointer',
+                    color: journalTagFilter.includes(tag) ? '#0D0F0E' : 'var(--text-secondary)',
+                  }}>#{tag}</button>
+                ))}
+                {MOOD_OPTIONS.map(m => (
+                  <button key={m.id} type="button" onClick={() => {
+                    setJournalMoodFilter(prev => prev === m.id ? null : m.id);
+                  }} style={{
+                    background: journalMoodFilter === m.id ? 'var(--bg-primary)' : 'transparent',
+                    border: `1px solid ${journalMoodFilter === m.id ? 'var(--accent-laurel)' : 'var(--border-strong)'}`,
+                    borderRadius: 4, padding: '3px 6px', fontSize: 13, cursor: 'pointer',
+                  }}>{m.emoji}</button>
+                ))}
+                {(journalTagFilter.length > 0 || journalMoodFilter || journalSearch) && (
+                  <button type="button" onClick={() => { setJournalTagFilter([]); setJournalMoodFilter(null); setJournalSearch(''); }}
+                    style={{ background: 'transparent', border: '1px solid var(--accent-blood)', borderRadius: 4, padding: '3px 8px', fontSize: 10, fontWeight: 700, color: 'var(--accent-blood)', cursor: 'pointer' }}>Clear</button>
+                )}
+              </div>
+
+              {/* Timeline */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+                {filtered.map(entry => (
+                  <StatCard key={entry.ref} style={{ padding: 'var(--sp-3)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>
+                        S{entry.week} · {dayFr(entry.sessionDay)}
+                      </span>
+                      <span style={{ fontSize: 9, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>{dayLabel(entry.sessionDay)}</span>
+                      <span style={{ flex: 1 }} />
+                      {entry.journal?.mood && <span style={{ fontSize: 14 }}>{moodEmoji(entry.journal.mood)}</span>}
+                      {entry.journal?.fatiguePerceived && (
+                        <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>F{entry.journal.fatiguePerceived}/10</span>
+                      )}
+                    </div>
+
+                    {entry.notes.length > 0 && entry.notes.map(n => (
+                      <div key={n.id} style={{ marginBottom: 6, padding: '6px 10px', background: 'var(--bg-primary)', borderRadius: 6, borderLeft: '2px solid var(--border-strong)' }}>
+                        <div style={{ fontSize: 9, color: 'var(--text-tertiary)', fontWeight: 700, marginBottom: 2, fontFamily: 'var(--font-mono)' }}>
+                          {n.exerciseName}{n.setId ? ` · Set` : ''}
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.4 }}>{n.text}</div>
+                        {n.tags?.length > 0 && (
+                          <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+                            {n.tags.map(t => <span key={t} style={{ fontSize: 9, color: 'var(--accent-laurel)', fontWeight: 600 }}>#{t}</span>)}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+
+                    {entry.journal && (
+                      <div style={{ marginTop: entry.notes.length > 0 ? 6 : 0 }}>
+                        {entry.journal.whatWorked && (
+                          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                            <span style={{ color: 'var(--accent-laurel)', fontWeight: 700, fontSize: 9, fontFamily: 'var(--font-mono)' }}>MARCHÉ : </span>
+                            {entry.journal.whatWorked}
+                          </div>
+                        )}
+                        {entry.journal.whatFrotted && (
+                          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                            <span style={{ color: 'var(--accent-blood)', fontWeight: 700, fontSize: 9, fontFamily: 'var(--font-mono)' }}>FROTTÉ : </span>
+                            {entry.journal.whatFrotted}
+                          </div>
+                        )}
+                        {entry.journal.notes && (
+                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 4 }}>{entry.journal.notes}</div>
+                        )}
+                        {entry.journal.tags?.length > 0 && (
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                            {entry.journal.tags.map(t => <span key={t} style={{ fontSize: 9, color: 'var(--accent-laurel)', fontWeight: 600 }}>#{t}</span>)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </StatCard>
+                ))}
+              </div>
+
+              {filtered.length === 0 && allEntries.length > 0 && (
+                <StatCard style={{ padding: 'var(--sp-4)' }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+                    Aucun résultat pour cette recherche.
+                  </div>
+                </StatCard>
+              )}
+            </div>
           );
         })()}
 
@@ -9249,6 +9861,78 @@
               color: histSyncState.status === 'ok' ? 'var(--accent-laurel)' : 'var(--accent-blood)',
             }}>{histSyncState.msg}</div>
           )}
+        </Card>
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
+            Export Journal
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 10 }}>
+            Télécharge ton journal complet en JSON ou Markdown pour archivage ou analyse externe.
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" onClick={async () => {
+              const [notes, journals] = await Promise.all([db.notes.toArray(), db.journals.toArray()]);
+              const payload = { notes, journals, generatedAt: new Date().toISOString(), version: 1 };
+              const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              const w = getCurrentWeek();
+              const d = new Date().toLocaleDateString('fr-CA');
+              a.href = url; a.download = `odyssea-journal-S${w}-${d}.json`; a.click();
+              URL.revokeObjectURL(url);
+            }} style={{
+              flex: 1, background: 'transparent', border: '1px solid var(--border-strong)',
+              borderRadius: 10, color: 'var(--text-primary)', padding: '10px 14px',
+              fontSize: 11, fontWeight: 700, letterSpacing: '0.4px', textTransform: 'uppercase', cursor: 'pointer',
+            }}>Export JSON</button>
+            <button type="button" onClick={async () => {
+              const [notes, journals] = await Promise.all([db.notes.toArray(), db.journals.toArray()]);
+              const byRef = {};
+              for (const n of notes) { (byRef[n.sessionRef] = byRef[n.sessionRef] || { notes: [], journal: null }).notes.push(n); }
+              for (const j of journals) { (byRef[j.sessionRef] = byRef[j.sessionRef] || { notes: [], journal: null }).journal = j; }
+              const refs = Object.keys(byRef).sort();
+              let md = '# Odyssea Journal\n\n';
+              let lastWeek = 0;
+              for (const ref of refs) {
+                const entry = byRef[ref];
+                const week = entry.journal?.week || entry.notes[0]?.week || 0;
+                const sessionDay = entry.journal?.sessionDay || entry.notes[0]?.sessionDay || '';
+                if (week !== lastWeek) { md += `## Semaine ${week}\n\n`; lastWeek = week; }
+                const dayFr = WEEK_DAYS.find(d => d.sessionDay === sessionDay)?.fr || sessionDay;
+                md += `### ${dayFr}\n\n`;
+                if (entry.journal) {
+                  const j = entry.journal;
+                  const moodLabel = MOOD_OPTIONS.find(m => m.id === j.mood)?.label || '';
+                  md += `- **Mood** : ${moodLabel}\n`;
+                  md += `- **Fatigue** : ${j.fatiguePerceived}/10\n`;
+                  if (j.sleepHours) md += `- **Sommeil** : ${j.sleepHours}h\n`;
+                  md += `- **Technique** : ${j.technicalQuality}/10\n`;
+                  if (j.nutrition) md += `- **Nutrition** : ${j.nutrition}\n`;
+                  if (j.whatWorked) md += `- **Marché** : ${j.whatWorked}\n`;
+                  if (j.whatFrotted) md += `- **Frotté** : ${j.whatFrotted}\n`;
+                  if (j.notes) md += `- **Notes** : ${j.notes}\n`;
+                  if (j.tags?.length) md += `- **Tags** : ${j.tags.map(t => '#' + t).join(' ')}\n`;
+                  md += '\n';
+                }
+                for (const n of entry.notes) {
+                  md += `> **${n.exerciseName || 'Note'}** : ${n.text}\n`;
+                  if (n.tags?.length) md += `> Tags : ${n.tags.map(t => '#' + t).join(' ')}\n`;
+                  md += '\n';
+                }
+              }
+              const blob = new Blob([md], { type: 'text/markdown' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              const w = getCurrentWeek();
+              const d = new Date().toLocaleDateString('fr-CA');
+              a.href = url; a.download = `odyssea-journal-S${w}-${d}.md`; a.click();
+              URL.revokeObjectURL(url);
+            }} style={{
+              flex: 1, background: 'transparent', border: '1px solid var(--border-strong)',
+              borderRadius: 10, color: 'var(--text-primary)', padding: '10px 14px',
+              fontSize: 11, fontWeight: 700, letterSpacing: '0.4px', textTransform: 'uppercase', cursor: 'pointer',
+            }}>Export Markdown</button>
+          </div>
         </Card>
         <Card style={{ marginTop: 12 }}>
           <div style={{ color: 'var(--text-secondary)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 }}>
