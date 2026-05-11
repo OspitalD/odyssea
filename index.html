@@ -888,6 +888,336 @@
     journals: '++id, sessionRef, week, sessionDay, createdAt',
   });
 
+  db.version(7).stores({
+    recommendations: '++id, type, priority, week, createdAt, status',
+  });
+
+  /* ==========================================================
+     WORKOUT INTELLIGENCE — Rule Engine (P0-polish/M)
+     12 deterministic rules, no external AI. Reads all tables,
+     writes only to db.recommendations.
+     ========================================================== */
+
+  async function evaluateRules() {
+    const now = new Date().toISOString();
+    const currentWeek = getCurrentWeek();
+    const currentBlock = getCurrentBlock(currentWeek);
+    const bwPref = await db.prefs.get('bodyweight');
+    const bodyweight = bwPref?.value || 0;
+
+    const [allSets, allPrs, allProgramme, allJournals, allNotes] = await Promise.all([
+      db.sets.toArray(),
+      db.prs.toArray(),
+      db.programme.toArray(),
+      db.journals.toArray(),
+      db.notes.toArray(),
+    ]);
+
+    const recos = [];
+    const weeklyE1RMs = computeWeeklyE1RMs(allSets);
+
+    const volForWeek = (w) => allSets.filter(s => s.week === w).reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0);
+
+    // Rule 1 — Plateau detected
+    for (const std of ATHX_STANDARDS) {
+      const pts = weeklyE1RMs[std.id] || [];
+      if (pts.length < 3) continue;
+      const last3 = pts.slice(-3);
+      if (last3.length < 3) continue;
+      const vals = last3.map(p => p.e1RM);
+      const maxDelta = Math.max(Math.abs(vals[1] - vals[0]), Math.abs(vals[2] - vals[1]), Math.abs(vals[2] - vals[0]));
+      if (maxDelta < 1.5) {
+        const weeks = last3.map(p => p.week);
+        recos.push({
+          type: 'plateau-detected', priority: 'medium', liftKey: std.id,
+          message: `Plateau détecté sur ${std.name} depuis 3 semaines. Considère un deload (-15% volume) puis variation de stimulus.`,
+          rationale: `e1RM max hebdo S${weeks[0]}=${vals[0]}kg → S${weeks[1]}=${vals[1]} → S${weeks[2]}=${vals[2]}kg. Delta < 1.5kg.`,
+          context: { lift: std.id, weeks, values: vals },
+          expiresAt: new Date(Date.now() + 14 * 86400000).toISOString(),
+        });
+      }
+    }
+
+    // Rule 2 — Volume overreach
+    if (currentWeek >= 4) {
+      const curVol = volForWeek(currentWeek);
+      const prev3 = [volForWeek(currentWeek - 1), volForWeek(currentWeek - 2), volForWeek(currentWeek - 3)].filter(v => v > 0);
+      if (prev3.length >= 2 && curVol > 0) {
+        const avg = prev3.reduce((a, b) => a + b, 0) / prev3.length;
+        if (avg > 0 && curVol > avg * 1.3) {
+          const pct = Math.round(((curVol - avg) / avg) * 100);
+          recos.push({
+            type: 'volume-overreach', priority: 'high', liftKey: null,
+            message: `Volume cette semaine +${pct}% vs moyenne. Surveille la fatigue, considère un deload partiel.`,
+            rationale: `Vol S${currentWeek}=${Math.round(curVol)} vs avg(S${currentWeek - 3}..S${currentWeek - 1})=${Math.round(avg)}. Delta +${pct}%.`,
+            context: { currentVolume: curVol, avgVolume: avg, pct },
+            expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(),
+          });
+        }
+      }
+    }
+
+    // Rule 3 — Volume undershoot
+    if (currentWeek >= 4) {
+      const curVol = volForWeek(currentWeek);
+      const curSessions = new Set(allSets.filter(s => s.week === currentWeek).map(s => s.sessionDay)).size;
+      const prev3 = [volForWeek(currentWeek - 1), volForWeek(currentWeek - 2), volForWeek(currentWeek - 3)].filter(v => v > 0);
+      if (prev3.length >= 2 && curVol > 0 && curSessions >= 1) {
+        const avg = prev3.reduce((a, b) => a + b, 0) / prev3.length;
+        if (avg > 0 && curVol < avg * 0.7) {
+          const pct = Math.round(((avg - curVol) / avg) * 100);
+          recos.push({
+            type: 'volume-undershoot', priority: 'low', liftKey: null,
+            message: `Volume cette semaine -${pct}% vs moyenne. Augmente le stimulus si la fatigue le permet.`,
+            rationale: `Vol S${currentWeek}=${Math.round(curVol)} vs avg=${Math.round(avg)}. Delta -${pct}%.`,
+            context: { currentVolume: curVol, avgVolume: avg, pct },
+            expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(),
+          });
+        }
+      }
+    }
+
+    // Rule 4 — Mètis decline
+    const programmeBySlot = {};
+    for (const p of allProgramme) {
+      programmeBySlot[`${p.week}_${p.sessionDay}_${p.exerciseSlot}`] = p;
+    }
+    const metisForWeek = (w) => {
+      const weekSets = allSets.filter(s => s.week === w);
+      const eligible = weekSets.filter(s => {
+        if (s.rir === null || s.rir === undefined) return false;
+        const key = `${s.week}_${s.sessionDay}_${s.exerciseSlot}`;
+        return getPrescribedRir(programmeBySlot[key]) !== null;
+      });
+      const inWindow = eligible.filter(s => {
+        const key = `${s.week}_${s.sessionDay}_${s.exerciseSlot}`;
+        const prescribed = getPrescribedRir(programmeBySlot[key]);
+        return Math.abs(s.rir - prescribed) <= 1;
+      });
+      return eligible.length > 0 ? (inWindow.length / eligible.length) * 100 : null;
+    };
+    if (currentWeek >= 3) {
+      const m0 = metisForWeek(currentWeek);
+      const m2 = metisForWeek(currentWeek - 2);
+      if (m0 !== null && m2 !== null && m2 - m0 > 15) {
+        recos.push({
+          type: 'metis-decline', priority: 'medium', liftKey: null,
+          message: `Discipline RIR en baisse (-${Math.round(m2 - m0)} pts en 2 sem). Concentre-toi sur le RIR prescrit avant la charge.`,
+          rationale: `Mètis S${currentWeek - 2}=${Math.round(m2)}%, S${currentWeek}=${Math.round(m0)}%.`,
+          context: { weekOld: currentWeek - 2, weekNew: currentWeek, old: m2, current: m0 },
+          expiresAt: new Date(Date.now() + 14 * 86400000).toISOString(),
+        });
+      }
+    }
+
+    // Rule 5 — No PR streak
+    const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString();
+    const recentPrs = allPrs.filter(p => p.validatedAt >= fourteenDaysAgo);
+    const recentStrengthSessions = new Set(
+      allSets.filter(s => s.completedAt >= fourteenDaysAgo && STRENGTH_DAYS.includes(s.sessionDay))
+        .map(s => `${s.week}_${s.sessionDay}`)
+    ).size;
+    if (recentPrs.length === 0 && recentStrengthSessions >= 3 && allPrs.length > 0) {
+      const lastPr = allPrs.sort((a, b) => (b.validatedAt || '').localeCompare(a.validatedAt || ''))[0];
+      recos.push({
+        type: 'no-pr-streak', priority: 'low', liftKey: null,
+        message: `Aucun PR depuis 14 jours malgré ${recentStrengthSessions} sessions. Le bloc est en accumulation, c'est attendu — mais vérifie ta progression de charge.`,
+        rationale: `Last PR : ${lastPr.validatedAt?.slice(0, 10)} (${lastPr.exerciseName} ${Math.round(lastPr.e1RM)}). Sessions depuis : ${recentStrengthSessions}.`,
+        context: { lastPr: lastPr.validatedAt, sessions: recentStrengthSessions },
+        expiresAt: new Date(Date.now() + 14 * 86400000).toISOString(),
+      });
+    }
+
+    // Rule 6 — Perfect adherence
+    const last14DaysSessions = new Set(
+      allSets.filter(s => s.completedAt >= fourteenDaysAgo && STRENGTH_DAYS.includes(s.sessionDay))
+        .map(s => `${s.week}_${s.sessionDay}`)
+    );
+    if (last14DaysSessions.size >= 8) {
+      recos.push({
+        type: 'perfect-adherence', priority: 'low', liftKey: null,
+        message: "14 jours d'adhérence parfaite. Áreté en hausse mécanique.",
+        rationale: `${last14DaysSessions.size} sessions tenues / 8 prescrites.`,
+        context: { sessions: last14DaysSessions.size },
+        expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(),
+      });
+    }
+
+    // Rule 7 — ATHX target near
+    if (bodyweight > 0) {
+      for (const std of ATHX_STANDARDS) {
+        const pts = weeklyE1RMs[std.id] || [];
+        if (pts.length === 0) continue;
+        const current = pts[pts.length - 1].e1RM;
+        const target = bodyweight * std.targetBW;
+        const ratio = current / target;
+        if (ratio > 0.95 && ratio < 1.0) {
+          const last4 = pts.slice(-4);
+          let eta = null;
+          if (last4.length >= 4) {
+            const n = last4.length;
+            const sumX = last4.reduce((s, p) => s + p.week, 0);
+            const sumY = last4.reduce((s, p) => s + p.e1RM, 0);
+            const sumXY = last4.reduce((s, p) => s + p.week * p.e1RM, 0);
+            const sumX2 = last4.reduce((s, p) => s + p.week * p.week, 0);
+            const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+            if (slope > 0) eta = Math.ceil((target - current) / slope);
+          }
+          recos.push({
+            type: 'athx-target-near', priority: 'medium', liftKey: std.id,
+            message: `Tu es à ${Math.round(ratio * 100)}% du target ATHX ${std.name}.${eta ? ` ETA estimé ${eta} semaines au rythme actuel.` : ''}`,
+            rationale: `Current ${Math.round(current)}/${bodyweight}/${std.targetBW} = ${ratio.toFixed(2)}.${eta ? ` Trend sur 4 sem.` : ''}`,
+            context: { current, target, ratio, eta, bodyweight },
+            expiresAt: null,
+          });
+        }
+      }
+    }
+
+    // Rule 8 — Pattern concentration
+    const blockWeeks = currentBlock.weeks;
+    const blockSets = allSets.filter(s => s.week >= blockWeeks[0] && s.week <= blockWeeks[1]);
+    const totalBlockVol = blockSets.reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0);
+    if (totalBlockVol > 0) {
+      for (const std of ATHX_STANDARDS) {
+        const patternVol = blockSets
+          .filter(s => std.pattern.test(s.exerciseName || ''))
+          .reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0);
+        const pct = (patternVol / totalBlockVol) * 100;
+        if (pct > 45) {
+          const others = ATHX_STANDARDS.map(o => {
+            const v = blockSets.filter(s => o.pattern.test(s.exerciseName || '')).reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0);
+            return `${o.name.split(' ')[0]} ${Math.round(v / 1000)}k`;
+          }).join(', ');
+          recos.push({
+            type: 'pattern-concentration', priority: 'medium', liftKey: std.id,
+            message: `Volume ${std.name.split(' ')[0]}-pattern = ${Math.round(pct)}% du total bloc. Diversifie les patterns pour éviter overuse.`,
+            rationale: others,
+            context: { lift: std.id, pct, totalBlockVol },
+            expiresAt: new Date(Date.now() + 14 * 86400000).toISOString(),
+          });
+        }
+      }
+    }
+
+    // Rule 9 — Recovery red (volume vs previous week > 30%)
+    if (currentWeek >= 2) {
+      const curVol = volForWeek(currentWeek);
+      const prevVol = volForWeek(currentWeek - 1);
+      if (prevVol > 0 && curVol > prevVol * 1.3) {
+        const delta = Math.round(((curVol - prevVol) / prevVol) * 100);
+        recos.push({
+          type: 'recovery-red', priority: 'high', liftKey: null,
+          message: `Recovery alerte : volume +${delta}% vs sem précédente. Réduis l'intensité ou ajoute 1 jour off.`,
+          rationale: `Vol S${currentWeek}=${Math.round(curVol)} vs S${currentWeek - 1}=${Math.round(prevVol)}. Delta +${delta}%.`,
+          context: { currentVolume: curVol, prevVolume: prevVol, delta },
+          expiresAt: new Date(Date.now() + 3 * 86400000).toISOString(),
+        });
+      }
+    }
+
+    // Rule 10 — Sleep deficit (from journals)
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+    const recentJournals = allJournals.filter(j => j.createdAt >= sevenDaysAgo && j.sleepHours != null);
+    if (recentJournals.length >= 3) {
+      const avgSleep = recentJournals.reduce((s, j) => s + j.sleepHours, 0) / recentJournals.length;
+      if (avgSleep < 6.5) {
+        recos.push({
+          type: 'sleep-deficit', priority: 'high', liftKey: null,
+          message: `Sommeil moyen 7 derniers jours : ${avgSleep.toFixed(1)}h. Sub-optimal pour récupération. Priorise le sommeil ce soir.`,
+          rationale: `Journals : ${recentJournals.map(j => j.sleepHours + 'h').join(', ')}. Avg = ${avgSleep.toFixed(1)}h.`,
+          context: { avgSleep, values: recentJournals.map(j => j.sleepHours) },
+          expiresAt: new Date(Date.now() + 3 * 86400000).toISOString(),
+        });
+      }
+    }
+
+    // Rule 11 — Fatigue subjective high (from journals)
+    const recentFatigueJournals = allJournals.filter(j => j.fatiguePerceived != null).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 5);
+    if (recentFatigueJournals.length >= 5) {
+      const avgFatigue = recentFatigueJournals.reduce((s, j) => s + j.fatiguePerceived, 0) / recentFatigueJournals.length;
+      if (avgFatigue > 7) {
+        recos.push({
+          type: 'fatigue-subjective-high', priority: 'medium', liftKey: null,
+          message: `Fatigue subjective élevée (avg ${avgFatigue.toFixed(1)}/10) sur 5 dernières séances. Considère un jour off ou réduction de volume.`,
+          rationale: `Fatigue : ${recentFatigueJournals.map(j => j.fatiguePerceived).join(', ')}. Avg = ${avgFatigue.toFixed(1)}.`,
+          context: { avgFatigue, values: recentFatigueJournals.map(j => j.fatiguePerceived) },
+          expiresAt: new Date(Date.now() + 3 * 86400000).toISOString(),
+        });
+      }
+    }
+
+    // Rule 12 — Recurring tag from notes
+    const recentNotes = allNotes.filter(n => n.createdAt >= fourteenDaysAgo && n.tags?.length > 0);
+    const tagCounts = {};
+    for (const n of recentNotes) {
+      for (const t of (n.tags || [])) {
+        tagCounts[t] = (tagCounts[t] || 0) + 1;
+      }
+    }
+    for (const [tag, count] of Object.entries(tagCounts)) {
+      if (count > 3) {
+        recos.push({
+          type: 'recurring-tag', priority: 'low', liftKey: null,
+          message: `Tag "${tag}" apparaît dans ${count} notes sur 14 jours. Surveille — peut-être consultation ?`,
+          rationale: `Notes avec #${tag} : ${count} sur ${recentNotes.length} notes récentes.`,
+          context: { tag, count },
+          expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(),
+        });
+      }
+    }
+
+    return recos;
+  }
+
+  async function reconcileRecommendations() {
+    try {
+      const newRecos = await evaluateRules();
+      const existing = await db.recommendations.where('status').equals('active').toArray();
+      const now = new Date().toISOString();
+      const currentWeek = getCurrentWeek();
+
+      // Expire old active recos that are no longer generated
+      for (const ex of existing) {
+        if (ex.expiresAt && ex.expiresAt < now) {
+          await db.recommendations.update(ex.id, { status: 'expired' });
+          continue;
+        }
+        const matchKey = ex.type + '|' + (ex.liftKey || '');
+        const still = newRecos.find(r => (r.type + '|' + (r.liftKey || '')) === matchKey);
+        if (!still) {
+          await db.recommendations.update(ex.id, { status: 'expired' });
+        }
+      }
+
+      // Upsert new recos
+      const freshExisting = await db.recommendations.where('status').equals('active').toArray();
+      for (const reco of newRecos) {
+        const matchKey = reco.type + '|' + (reco.liftKey || '');
+        const prev = freshExisting.find(e => (e.type + '|' + (e.liftKey || '')) === matchKey);
+        if (prev) {
+          await db.recommendations.update(prev.id, {
+            message: reco.message, rationale: reco.rationale,
+            context: reco.context, expiresAt: reco.expiresAt,
+          });
+        } else {
+          await db.recommendations.add({
+            ...reco,
+            week: currentWeek,
+            createdAt: now,
+            status: 'active',
+            followedAt: null,
+            dismissedAt: null,
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('[coach] reconcileRecommendations error:', err);
+    }
+  }
+
+  const STRENGTH_DAYS = ['Monday', 'Wednesday', 'Friday', 'Saturday'];
+
   // Singleton de protection contre les seeds concurrents au boot.
   let seedInFlight = null;
 
@@ -2124,6 +2454,65 @@
       return () => { alive = false; };
     }, [query]);
     return tags;
+  };
+
+  /* ==========================================================
+     COACH HOOKS (P0-polish/M)
+     ========================================================== */
+
+  const useActiveRecommendations = (refreshKey = 0) => {
+    const [recos, setRecos] = useState([]);
+    useEffect(() => {
+      let alive = true;
+      db.recommendations.where('status').equals('active').toArray().then(rows => {
+        if (!alive) return;
+        const prio = { high: 0, medium: 1, low: 2 };
+        rows.sort((a, b) => (prio[a.priority] ?? 2) - (prio[b.priority] ?? 2));
+        setRecos(rows);
+      });
+      return () => { alive = false; };
+    }, [refreshKey]);
+    return recos;
+  };
+
+  const usePreSetCoaching = (exerciseName, week, sessionDay, exerciseSlot, setNumber) => {
+    const [hint, setHint] = useState(null);
+    useEffect(() => {
+      if (!exerciseName || !week || setNumber == null) { setHint(null); return; }
+      let alive = true;
+      (async () => {
+        const prevWeek = week - 1;
+        if (prevWeek < 1) { if (alive) setHint(null); return; }
+        const prevSets = await db.sets.where('week').equals(prevWeek).toArray();
+        const match = prevSets
+          .filter(s => s.sessionDay === sessionDay && s.exerciseSlot === exerciseSlot && s.setNumber === setNumber)
+          .sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''));
+        if (!alive) return;
+        if (match.length === 0) { setHint(null); return; }
+        const prev = match[0];
+        const suggestion = await db.weekSuggestions.get([week, sessionDay, exerciseSlot]).catch(() => null);
+        if (!alive) return;
+        let msg = `Dernière fois (S${prevWeek}) : ${prev.weight}×${prev.reps}`;
+        if (prev.rir != null) msg += ` RIR ${prev.rir}`;
+        if (prev.e1RM) msg += `, e1RM ${prev.e1RM}`;
+        msg += '.';
+        if (suggestion?.suggestedWeight != null) {
+          msg += ` Suggestion : ${suggestion.suggestedWeight}kg`;
+          if (prev.reps) msg += `×${prev.reps}`;
+          if (prev.rir != null) msg += ` RIR ${prev.rir}`;
+          msg += '.';
+        }
+        setHint(msg);
+      })();
+      return () => { alive = false; };
+    }, [exerciseName, week, sessionDay, exerciseSlot, setNumber]);
+    return hint;
+  };
+
+  let _reconcileDebounce = null;
+  const triggerReconcile = () => {
+    if (_reconcileDebounce) clearTimeout(_reconcileDebounce);
+    _reconcileDebounce = setTimeout(() => reconcileRecommendations(), 500);
   };
 
   /* ==========================================================
@@ -3944,6 +4333,7 @@
       };
       if (existing) await db.journals.update(existing.id, data);
       else await db.journals.add(data);
+      triggerReconcile();
       if (onSave) onSave();
     };
 
@@ -4057,6 +4447,130 @@
     );
   };
 
+  /* ==========================================================
+     COACH UI COMPONENTS (P0-polish/M)
+     ========================================================== */
+
+  const LIFT_SHORT = { squat: 'Squat', deadlift: 'Deadlift', bench: 'Bench', ohp: 'OHP', row: 'Row' };
+
+  const CoachCard = ({ recos, onRefresh }) => {
+    const [drillReco, setDrillReco] = useState(null);
+    const [showAll, setShowAll] = useState(false);
+    if (!recos || recos.length === 0) return null;
+    const visible = showAll ? recos : recos.slice(0, 3);
+    const prioColor = (p) => p === 'high' ? 'var(--accent-blood)' : p === 'medium' ? 'var(--accent-olympus)' : 'var(--text-secondary)';
+    const prioLabel = (p) => p === 'high' ? 'ALERTE' : p === 'medium' ? 'ATTENTION' : 'INFO';
+    return (
+      <>
+        <div style={{ marginBottom: 'var(--sp-4)' }}>
+          {visible.map(r => (
+            <div key={r.id} style={{
+              background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--r-md)', padding: '14px 16px', marginBottom: 'var(--sp-2)',
+              borderLeft: `3px solid ${prioColor(r.priority)}`,
+            }}>
+              <div style={{
+                fontSize: 9, fontWeight: 800, letterSpacing: '0.15em', textTransform: 'uppercase',
+                color: prioColor(r.priority), fontFamily: 'var(--font-mono)', marginBottom: 6,
+              }}>{prioLabel(r.priority)}{r.liftKey ? ` · ${(LIFT_SHORT[r.liftKey] || r.liftKey).toUpperCase()}` : ''}</div>
+              <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5, marginBottom: 10 }}>{r.message}</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" onClick={() => setDrillReco(r)} style={{
+                  background: 'transparent', border: '1px solid var(--border-strong)', borderRadius: 6,
+                  color: 'var(--text-secondary)', padding: '5px 10px', fontSize: 10, fontWeight: 700, cursor: 'pointer',
+                }}>Détail</button>
+                <button type="button" onClick={async () => {
+                  await db.recommendations.update(r.id, { status: 'followed', followedAt: new Date().toISOString() });
+                  onRefresh();
+                }} style={{
+                  background: 'transparent', border: '1px solid var(--accent-laurel)', borderRadius: 6,
+                  color: 'var(--accent-laurel)', padding: '5px 10px', fontSize: 10, fontWeight: 700, cursor: 'pointer',
+                }}>Suivre</button>
+                <button type="button" onClick={async () => {
+                  await db.recommendations.update(r.id, { status: 'dismissed', dismissedAt: new Date().toISOString() });
+                  onRefresh();
+                }} style={{
+                  background: 'transparent', border: '1px solid var(--border-strong)', borderRadius: 6,
+                  color: 'var(--text-tertiary)', padding: '5px 10px', fontSize: 10, fontWeight: 700, cursor: 'pointer',
+                }}>Skip</button>
+              </div>
+            </div>
+          ))}
+          {recos.length > 3 && !showAll && (
+            <button type="button" onClick={() => setShowAll(true)} style={{
+              background: 'transparent', border: 'none', color: 'var(--accent-olympus)',
+              fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: '4px 0',
+            }}>Voir tout ({recos.length})</button>
+          )}
+        </div>
+
+        {drillReco && (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'var(--sp-4)',
+          }} onClick={() => setDrillReco(null)}>
+            <div style={{
+              background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--r-lg)', padding: 'var(--sp-4)', maxWidth: 360, width: '100%',
+            }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--sp-3)' }}>
+                <span style={{
+                  fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase',
+                  color: prioColor(drillReco.priority), fontFamily: 'var(--font-mono)',
+                }}>{drillReco.type}</span>
+                <button type="button" onClick={() => setDrillReco(null)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 18 }}>✕</button>
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5, marginBottom: 12 }}>{drillReco.message}</div>
+              <div style={{
+                fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6,
+                padding: '10px 12px', background: 'var(--bg-surface)', borderRadius: 8,
+                fontFamily: 'var(--font-mono)', marginBottom: 12,
+              }}>{drillReco.rationale}</div>
+              {drillReco.context && (
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', lineHeight: 1.6, wordBreak: 'break-all' }}>
+                  {Object.entries(drillReco.context).map(([k, v]) => (
+                    <div key={k}>{k}: {typeof v === 'object' ? JSON.stringify(v) : String(v)}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
+
+  const PreSetCoach = ({ exerciseName, week, sessionDay, exerciseSlot, setNumber }) => {
+    const hint = usePreSetCoaching(exerciseName, week, sessionDay, exerciseSlot, setNumber);
+    if (!hint) return null;
+    return (
+      <div style={{
+        fontSize: 11, color: 'var(--text-muted, var(--text-tertiary))', fontStyle: 'italic',
+        padding: '6px 0 8px', lineHeight: 1.4,
+      }}>{hint}</div>
+    );
+  };
+
+  const PostSetFeedback = ({ message, onDone }) => {
+    useEffect(() => {
+      const t = setTimeout(onDone, 3000);
+      return () => clearTimeout(t);
+    }, []);
+    return (
+      <div style={{
+        position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+        maxWidth: 'calc(var(--max-app-width) - 32px)', width: 'calc(100% - 32px)',
+        background: 'var(--bg-secondary, var(--bg-surface))', color: 'var(--text-primary)',
+        padding: '12px 16px', borderRadius: 'var(--r-md)',
+        fontSize: 13, fontWeight: 600, lineHeight: 1.4, textAlign: 'center',
+        zIndex: 80, animation: 'fade-in 200ms var(--ease-out)',
+        border: '1px solid var(--border-subtle)',
+        boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+      }}>{message}</div>
+    );
+  };
+
   // ExoCard : 1 carte par exo, accordéon, saisie set complète.
   const ExoCard = ({ ex, week, sessionDay, sets, isOpen, onToggle, onSetValidated, onBadgesUnlocked }) => {
     const lastSet = sets && sets.length ? sets[sets.length - 1] : null;
@@ -4140,6 +4654,7 @@
 
     const [flash, setFlash] = useState(false);
     const [prOverlay, setPrOverlay] = useState(null);
+    const [postSetMsg, setPostSetMsg] = useState(null);
 
     const validate = async () => {
       if (format === 'jump') {
@@ -4230,6 +4745,33 @@
       checkBadges().then(newly => { if (newly.length) onBadgesUnlocked(newly); });
       setFlash(true);
       setTimeout(() => setFlash(false), 250);
+      // Post-set feedback
+      try {
+        const progKey = `${week}_${sessionDay}_${ex.exerciseSlot}`;
+        const progRow = await db.programme.where('[week+sessionDay+exerciseSlot]').equals([week, sessionDay, ex.exerciseSlot]).first().catch(() => null);
+        const prescribedRir = progRow ? getPrescribedRir(progRow) : null;
+        if (isPR) {
+          setPostSetMsg('PR battu ! +2.5kg next session');
+        } else if (prescribedRir !== null && rir < prescribedRir - 1) {
+          setPostSetMsg(`RIR plus bas que prescrit (${rir} vs ${prescribedRir}) — peut-être deload ?`);
+        } else if (prescribedRir !== null && rir > prescribedRir + 1) {
+          setPostSetMsg(`RIR plus haut que prescrit (${rir} vs ${prescribedRir}) — augmente la charge prochaine fois`);
+        } else {
+          const sessionSets = await db.sets.where('week').equals(week).toArray()
+            .then(all => all.filter(s => s.sessionDay === sessionDay));
+          const sessionVol = sessionSets.reduce((a, s) => a + (s.weight || 0) * (s.reps || 0), 0);
+          const prevWeekSets = week > 1 ? await db.sets.where('week').equals(week - 1).toArray()
+            .then(all => all.filter(s => s.sessionDay === sessionDay)) : [];
+          if (prevWeekSets.length > 0) {
+            const prevVol = prevWeekSets.reduce((a, s) => a + (s.weight || 0) * (s.reps || 0), 0);
+            if (prevVol > 0 && sessionVol > prevVol * 1.3) {
+              const pct = Math.round(((sessionVol - prevVol) / prevVol) * 100);
+              setPostSetMsg(`Volume +${pct}% vs ta moyenne — surveille la fatigue`);
+            }
+          }
+        }
+      } catch {}
+      triggerReconcile();
       onSetValidated();
     };
 
@@ -4339,6 +4881,7 @@
             </div>
           )}
         </div>
+        <PreSetCoach exerciseName={ex.exerciseName} week={week} sessionDay={sessionDay} exerciseSlot={ex.exerciseSlot} setNumber={nextSetNumber} />
         <div style={{ marginBottom: 10 }}>
           <div style={{ fontSize: 10, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>Weight{suggestionApplied && <span style={{ fontSize: 10, color: 'var(--accent-laurel)', border: '1px solid var(--accent-laurel)', borderRadius: 4, padding: '2px 4px', textTransform: 'none', letterSpacing: '0.3px', fontWeight: 600 }}>Suggéré S{weekSuggestion.sourceWeek}</span>}</div>
           <Stepper value={weight} onChange={setWeight} steps={[-5, -2.5, +2.5, +5]} unit="kg" fontSize={32} />
@@ -4774,6 +5317,7 @@
         )}
       </Card>
       {prOverlay && <PROverlay prDetails={prOverlay} onDone={() => setPrOverlay(null)} />}
+      {postSetMsg && <PostSetFeedback message={postSetMsg} onDone={() => setPostSetMsg(null)} />}
       {noteModalSetId != null && (
         <NoteInput
           setId={noteModalSetId}
@@ -5305,6 +5849,7 @@
         weight, reps, rir, e1RM: round05(epley(weight, reps)),
         completedAt: new Date().toISOString(), syncedAt: null,
       });
+      triggerReconcile();
       onValidated();
     };
     const removeLastSet = async () => {
@@ -6073,6 +6618,11 @@
     const [completedBlock, setCompletedBlock] = useState(null);
     const [council, setCouncil] = useState(null);
 
+    // Coach recommendations
+    const [coachTick, setCoachTick] = useState(0);
+    const activeRecos = useActiveRecommendations(coachTick);
+    useEffect(() => { reconcileRecommendations().then(() => setCoachTick(t => t + 1)); }, []);
+
     // Vérif Conseil des Dieux : à chaque mount de la page (= ouverture app),
     // si dimanche et pas encore vu aujourd'hui → afficher.
     useEffect(() => {
@@ -6294,6 +6844,9 @@
       setEndPhrase(phrase);
       // Sync en arrière-plan pendant le sas de décompression
       syncPendingSets().catch(() => {});
+      // Re-evaluate coach recommendations
+      triggerReconcile();
+      setTimeout(() => setCoachTick(t => t + 1), 1500);
     };
 
     const handleEndComplete = useCallback(() => {
@@ -6570,6 +7123,9 @@
             <span className="ody-tactical" style={{ fontSize: 13 }}>{todayLabel}</span>
           </div>
           )}
+
+          {/* Coach recommendations */}
+          <CoachCard recos={activeRecos} onRefresh={() => setCoachTick(t => t + 1)} />
 
           {/* KPI 2×2 grid */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)' }}>
@@ -7675,8 +8231,6 @@
     ohp:      'var(--text-secondary)',
     row:      '#7AAEB7',
   };
-  const LIFT_SHORT = { squat: 'Squat', deadlift: 'Deadlift', bench: 'Bench', ohp: 'OHP', row: 'Row' };
-
   const FORMAT_COLORS = {
     density:   'rgba(62, 207, 160, 0.7)',
     emom:      'rgba(232, 160, 32, 0.7)',
@@ -7686,7 +8240,6 @@
     iso:       'rgba(122, 124, 122, 0.5)',
   };
 
-  const STRENGTH_DAYS = ['Monday', 'Wednesday', 'Friday', 'Saturday'];
   const STRENGTH_DAY_FR = { Monday: 'Lundi', Wednesday: 'Mercredi', Friday: 'Vendredi', Saturday: 'Samedi' };
   const HEATMAP_ROWS = ['Monday', 'Wednesday', 'Friday', 'Saturday'];
   const HEATMAP_ROW_LABELS = ['LUN', 'MER', 'VEN', 'SAM'];
@@ -8061,6 +8614,15 @@
     const [journalTagFilter, setJournalTagFilter] = useState([]);
     const [journalMoodFilter, setJournalMoodFilter] = useState(null);
     const journalData = useAllNotesAndJournals(journalRefresh);
+    const [coachTick, setCoachTick] = useState(0);
+    const activeRecos = useActiveRecommendations(coachTick);
+    const [allRecos, setAllRecos] = useState([]);
+    useEffect(() => {
+      db.recommendations.toArray().then(rows => {
+        rows.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        setAllRecos(rows);
+      });
+    }, [coachTick]);
 
     if (!data) return (
       <div style={{ padding: 'var(--sp-5) var(--sp-4)', textAlign: 'center', color: 'var(--text-tertiary)' }}>
@@ -8663,6 +9225,76 @@
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{ins}</div>
               </StatCard>
             ))}
+          </div>
+        )}
+
+        {/* ═══════ SECTION 6b — COACH ═══════ */}
+        <SectionHeader>COACH</SectionHeader>
+
+        {activeRecos.length === 0 && allRecos.length === 0 ? (
+          <StatCard style={{ padding: 'var(--sp-4)' }}>
+            <div style={{ fontSize: 12, color: 'var(--text-tertiary)', fontStyle: 'italic', fontFamily: 'var(--font-greek)' }}>
+              Pas de recommandation active. Continue à t'entraîner pour activer le coach.
+            </div>
+          </StatCard>
+        ) : (
+          <div>
+            {activeRecos.length > 0 && (
+              <div style={{ marginBottom: 'var(--sp-3)' }}>
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--accent-olympus)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+                  ACTIVES · {activeRecos.length}
+                </div>
+                <CoachCard recos={activeRecos} onRefresh={() => setCoachTick(t => t + 1)} />
+              </div>
+            )}
+            {(() => {
+              const historical = allRecos.filter(r => r.status !== 'active').slice(0, 20);
+              const last30 = allRecos.filter(r => {
+                const d = new Date(r.createdAt);
+                return (Date.now() - d.getTime()) < 30 * 86400000;
+              });
+              const followed = last30.filter(r => r.status === 'followed').length;
+              const dismissed = last30.filter(r => r.status === 'dismissed').length;
+              const expired = last30.filter(r => r.status === 'expired').length;
+              return (
+                <>
+                  <StatCard style={{ padding: 'var(--sp-3)', marginBottom: 'var(--sp-3)' }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>
+                      30 DERNIERS JOURS
+                    </div>
+                    <div style={{ display: 'flex', gap: 'var(--sp-4)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+                      <span style={{ color: 'var(--accent-laurel)' }}>{followed} suivies</span>
+                      <span style={{ color: 'var(--text-tertiary)' }}>{dismissed} skip</span>
+                      <span style={{ color: 'var(--text-quaternary, var(--text-tertiary))' }}>{expired} expirées</span>
+                    </div>
+                  </StatCard>
+                  {historical.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--sp-2)' }}>
+                        HISTORIQUE
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {historical.map(r => {
+                          const statusColor = r.status === 'followed' ? 'var(--accent-laurel)' : r.status === 'dismissed' ? 'var(--text-tertiary)' : 'var(--text-quaternary, var(--text-tertiary))';
+                          const statusLabel = r.status === 'followed' ? 'SUIVIE' : r.status === 'dismissed' ? 'SKIP' : 'EXPIRÉE';
+                          return (
+                            <div key={r.id} style={{
+                              fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)',
+                              padding: '4px 0', borderBottom: '1px solid var(--border-subtle)',
+                              display: 'flex', gap: 8, alignItems: 'center',
+                            }}>
+                              <span style={{ color: statusColor, fontWeight: 700, minWidth: 55 }}>{statusLabel}</span>
+                              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.type}{r.liftKey ? ` · ${r.liftKey}` : ''}</span>
+                              <span style={{ color: 'var(--text-tertiary)', fontSize: 9 }}>S{r.week}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         )}
 
